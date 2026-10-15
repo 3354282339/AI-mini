@@ -4,7 +4,6 @@ import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -15,7 +14,6 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
-import android.service.notification.StatusBarNotification;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -60,6 +58,8 @@ public final class AIMiniNotificationService extends Service {
     private volatile boolean pollRunning;
     private SharedPreferences preferences;
     private PowerManager.WakeLock taskWakeLock;
+    /** Channel currently backing the foreground notification; a change needs a repost. */
+    private String lastPersistentChannelId;
 
     private final Runnable poller = new Runnable() {
         @Override
@@ -90,12 +90,12 @@ public final class AIMiniNotificationService extends Service {
 
         List<MonitoredTask> tasks = readTasks();
         // SharedPreferences is the monitor's source of truth. Activity state can
-        // remain stale while Gecko is frozen in the background, so an intent extra
-        // must never resurrect an already completed task in the foreground notice.
-        int runningCount = tasks.size();
+        // remain stale while the WebView is frozen in the background, so an intent
+        // extra must never resurrect an already completed task in the foreground
+        // notice.
         startForeground(
                 MainActivity.PERSISTENT_NOTIFICATION_ID,
-                buildPersistentNotification(runningCount)
+                buildPersistentNotification(tasks)
         );
 
         schedulePolling(tasks, alarmWake);
@@ -125,7 +125,7 @@ public final class AIMiniNotificationService extends Service {
         if (tasks == null || tasks.isEmpty()) {
             TaskMonitorJobService.cancel(this);
             releaseTaskWakeLock();
-            refreshPersistentNotification(0);
+            refreshPersistentNotification(new ArrayList<>());
         } else {
             TaskMonitorJobService.ensureScheduled(this);
             if (forceWakeLockRefresh) {
@@ -225,7 +225,7 @@ public final class AIMiniNotificationService extends Service {
             showTerminalNotification(terminal);
         }
         List<MonitoredTask> remaining = readTasks();
-        refreshPersistentNotification(remaining.size());
+        refreshPersistentNotification(remaining);
         handler.removeCallbacks(poller);
         if (remaining.isEmpty()) {
             TaskMonitorJobService.cancel(this);
@@ -347,16 +347,6 @@ public final class AIMiniNotificationService extends Service {
         return snapshot;
     }
 
-    private boolean isNewRuntimeTerminal(JSONObject previous, JSONObject current) {
-        if (previous == null || current == null) return false;
-        String previousMarker = previous.optString("marker", "").trim();
-        String currentMarker = current.optString("marker", "").trim();
-        if (!currentMarker.isEmpty() && !currentMarker.equals(previousMarker)) return true;
-        String previousState = previous.optString("state", "").trim();
-        return "running".equals(previousState)
-                && (currentMarker.isEmpty() || currentMarker.equals(previousMarker));
-    }
-
     private void restoreThreadRuntimeSnapshots() {
         threadRuntimeSnapshots.clear();
         threadRuntimeBaselineReady = preferences.contains(KEY_THREAD_RUNTIME_SNAPSHOTS);
@@ -386,22 +376,6 @@ public final class AIMiniNotificationService extends Service {
         preferences.edit()
                 .putString(KEY_THREAD_RUNTIME_SNAPSHOTS, array.toString())
                 .commit();
-    }
-
-    private boolean hasTerminalNotificationSince(String threadId, long startedAt) {
-        NotificationManager manager = getSystemService(NotificationManager.class);
-        if (manager == null) return false;
-        int expectedId = terminalNotificationId(threadId);
-        try {
-            for (StatusBarNotification notification : manager.getActiveNotifications()) {
-                if (notification == null || notification.getId() != expectedId) continue;
-                if (startedAt <= 0L || notification.getPostTime() + 1500L >= startedAt) {
-                    return true;
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        return false;
     }
 
     private int terminalNotificationId(String threadId) {
@@ -668,57 +642,87 @@ public final class AIMiniNotificationService extends Service {
         );
     }
 
-    private void refreshPersistentNotification(int runningCount) {
+    private void refreshPersistentNotification(List<MonitoredTask> tasks) {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
             manager.notify(
                     MainActivity.PERSISTENT_NOTIFICATION_ID,
-                    buildPersistentNotification(runningCount)
+                    buildPersistentNotification(tasks)
             );
         }
     }
 
-    private Notification buildPersistentNotification(int runningCount) {
-        Intent launchIntent = new Intent(this, MainActivity.class);
-        launchIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
+    /**
+     * Builds the foreground-service notification. In realtime mode it doubles as the
+     * app's "live" surface: the running conversation name, a chronometer anchored at
+     * the task start and an indeterminate progress bar while a task runs — the shape
+     * ColorOS 实况窗 / 灵动岛 and Android 16 promoted notifications promote.
+     */
+    private Notification buildPersistentNotification(List<MonitoredTask> tasks) {
+        boolean realtime = isRealtimeMode();
+        int runningCount = tasks == null ? 0 : tasks.size();
+        MonitoredTask primary = runningCount > 0 ? primaryRunningTask(tasks) : null;
+
+        String title;
+        String content;
+        String threadId = "";
+        long startedAt = 0L;
+        boolean running = false;
+        if (!realtime) {
+            title = getString(R.string.background_service_title);
+            content = getString(R.string.background_service_text);
+        } else if (primary == null) {
+            title = getString(R.string.task_connected_title);
+            content = getString(R.string.task_idle_text);
+        } else {
+            running = true;
+            threadId = primary.threadId;
+            startedAt = primary.startedAt;
+            String name = primary.name == null || primary.name.trim().isEmpty()
+                    ? getString(R.string.task_complete_fallback)
+                    : primary.name.trim();
+            title = getString(R.string.task_running_title);
+            content = runningCount == 1
+                    ? name
+                    : getResources().getQuantityString(
+                            R.plurals.task_running_multi,
+                            runningCount,
+                            name,
+                            runningCount
+                    );
+        }
+        // Realtime mode posts through the live channel so the system may promote the
+        // notification to a capsule / 实况窗; the plain background-service notice keeps
+        // the low-importance channel. Android ignores a channel change on an already
+        // posted notification, so the old one is dropped first.
+        String channelId = realtime
+                ? MainActivity.NOTIFICATION_LIVE_CHANNEL_ID
+                : MainActivity.NOTIFICATION_STATUS_CHANNEL_ID;
+        if (lastPersistentChannelId != null && !channelId.equals(lastPersistentChannelId)) {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) manager.cancel(MainActivity.PERSISTENT_NOTIFICATION_ID);
+        }
+        lastPersistentChannelId = channelId;
+        return TaskNotificationStyle.buildLiveNotification(
                 this,
                 MainActivity.PERSISTENT_NOTIFICATION_ID,
-                launchIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                channelId,
+                title,
+                content,
+                threadId,
+                startedAt,
+                running
         );
+    }
 
-        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                ? new Notification.Builder(this, MainActivity.NOTIFICATION_STATUS_CHANNEL_ID)
-                : new Notification.Builder(this);
-        boolean realtime = isRealtimeMode();
-        String title = realtime
-                ? getString(R.string.task_connected_title)
-                : getString(R.string.background_service_title);
-        String content = realtime
-                ? runningCount > 0
-                    ? getResources().getQuantityString(
-                            R.plurals.task_running_summary,
-                            runningCount,
-                            runningCount
-                    )
-                    : getString(R.string.task_idle_text)
-                : getString(R.string.background_service_text);
-        builder.setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(title)
-                .setContentText(content)
-                .setStyle(new Notification.BigTextStyle().bigText(content))
-                .setContentIntent(pendingIntent)
-                .setOngoing(true)
-                .setAutoCancel(false)
-                .setOnlyAlertOnce(true)
-                .setShowWhen(false)
-                .setCategory(Notification.CATEGORY_SERVICE)
-                .setVisibility(Notification.VISIBILITY_PUBLIC);
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            builder.setPriority(Notification.PRIORITY_LOW);
+    /** The task that owns the live notification: the one running for the longest. */
+    private MonitoredTask primaryRunningTask(List<MonitoredTask> tasks) {
+        MonitoredTask primary = null;
+        for (MonitoredTask task : tasks) {
+            if (task == null) continue;
+            if (primary == null || task.startedAt < primary.startedAt) primary = task;
         }
-        return builder.build();
+        return primary;
     }
 
     private void showTerminalNotification(TerminalResult terminal) {
@@ -798,6 +802,17 @@ public final class AIMiniNotificationService extends Service {
         statusChannel.setDescription(getString(R.string.notification_channel_tasks));
         statusChannel.setShowBadge(true);
 
+        NotificationChannel liveChannel = new NotificationChannel(
+                MainActivity.NOTIFICATION_LIVE_CHANNEL_ID,
+                getString(R.string.notification_channel_live),
+                NotificationManager.IMPORTANCE_HIGH
+        );
+        liveChannel.setDescription(getString(R.string.notification_channel_live_description));
+        liveChannel.setSound(null, null);
+        liveChannel.enableVibration(false);
+        liveChannel.setShowBadge(false);
+        liveChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+
         NotificationChannel alertChannel = new NotificationChannel(
                 MainActivity.NOTIFICATION_ALERT_CHANNEL_ID,
                 getString(R.string.notification_channel_alerts),
@@ -809,6 +824,7 @@ public final class AIMiniNotificationService extends Service {
         alertChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
         alertChannel.setShowBadge(true);
         manager.createNotificationChannel(statusChannel);
+        manager.createNotificationChannel(liveChannel);
         manager.createNotificationChannel(alertChannel);
     }
 
@@ -962,20 +978,6 @@ public final class AIMiniNotificationService extends Service {
             this.status = status;
             this.state = state == null ? "" : state;
             this.threadId = threadId == null ? "" : threadId;
-        }
-
-        MonitoredTask toMonitoredTask() {
-            return new MonitoredTask(
-                    threadId,
-                    threadId,
-                    resolveThreadName(
-                            threadId,
-                            getString(R.string.task_complete_fallback),
-                            status
-                    ),
-                    connection.statusForThread(threadId),
-                    System.currentTimeMillis()
-            );
         }
 
         boolean matches(MonitoredTask task) {

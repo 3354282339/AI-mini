@@ -151,6 +151,13 @@ public class MainActivity extends Activity {
     private static final String FLOAT_MENU_THEME_SYSTEM = "system";
     static final String NOTIFICATION_STATUS_CHANNEL_ID = "ai_mini_task_status_v4";
     static final String NOTIFICATION_ALERT_CHANNEL_ID = "ai_mini_task_alerts_v4";
+    /**
+     * Dedicated channel for the ongoing "live" notification. Deliberately
+     * IMPORTANCE_DEFAULT and silent: Android/ColorOS only consider a notification for
+     * the capsule / 实况窗 surface when it is not muted away, while a task-status
+     * update must never make a sound.
+     */
+    static final String NOTIFICATION_LIVE_CHANNEL_ID = "ai_mini_task_live_v5";
     static final String EXTRA_OPEN_THREAD_ID = "open_notification_thread_id";
     private static final String LEGACY_NOTIFICATION_CHANNEL_ID = "gpt_mini_tasks";
     static final int PERSISTENT_NOTIFICATION_ID = 2100;
@@ -274,6 +281,7 @@ public class MainActivity extends Activity {
     private TextView topInsetValue;
     private TextView conversationFontScaleValue;
     private TextView notificationModeValue;
+    private TextView notificationLiveSurfaceValue;
     private TextView notificationEndOption;
     private TextView notificationPersistentOption;
     private TextView miniMenuVersionText;
@@ -1363,6 +1371,11 @@ public class MainActivity extends Activity {
         );
         notificationSettingsPanel.addView(notificationPersistentOption);
 
+        notificationLiveSurfaceValue = settingsLabel("");
+        notificationLiveSurfaceValue.setTextSize(12);
+        notificationLiveSurfaceValue.setPadding(dp(10), dp(6), dp(10), dp(2));
+        notificationSettingsPanel.addView(notificationLiveSurfaceValue);
+
         View notificationHelpRow = createMiniNavRow(
                 getString(R.string.notification_help_title),
                 getString(R.string.notification_help_subtitle),
@@ -1434,6 +1447,18 @@ public class MainActivity extends Activity {
                 getString(R.string.notification_help_step_three_body),
                 R.drawable.notification_help_battery
         );
+        if (LiveNotificationSupport.hasVendorLiveSurface()) {
+            addNotificationHelpStep(
+                    steps,
+                    4,
+                    getString(R.string.notification_help_step_four),
+                    getString(
+                            R.string.notification_help_step_four_body,
+                            LiveNotificationSupport.surfaceName(this)
+                    ),
+                    0
+            );
+        }
 
         LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1482,6 +1507,7 @@ public class MainActivity extends Activity {
         card.addView(bodyView);
         notificationHelpStepBodies.add(bodyView);
 
+        if (imageRes == 0) return;
         ImageView image = new ImageView(this);
         image.setImageResource(imageRes);
         image.setAdjustViewBounds(true);
@@ -2775,6 +2801,16 @@ public class MainActivity extends Activity {
         notificationModeValue.setText(getString(R.string.notification_mode_value, getString(label)));
         updateOptionButton(notificationEndOption, NOTIFICATION_MODE_END.equals(notificationMode()));
         updateOptionButton(notificationPersistentOption, NOTIFICATION_MODE_PERSISTENT.equals(notificationMode()));
+        if (notificationLiveSurfaceValue != null) {
+            notificationLiveSurfaceValue.setText(
+                    getString(
+                            R.string.notification_live_surface_value,
+                            LiveNotificationSupport.surfaceName(this)
+                    )
+                            + "\n"
+                            + LiveNotificationSupport.surfaceDescription(this)
+            );
+        }
     }
 
     private void updateOptionButton(TextView button, boolean selected) {
@@ -5185,45 +5221,77 @@ public class MainActivity extends Activity {
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (manager == null) return;
         ensureNotificationChannels(manager);
-        Intent launchIntent = new Intent(this, MainActivity.class);
-        launchIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-                this,
-                PERSISTENT_NOTIFICATION_ID,
-                launchIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
+
         boolean realtime = NOTIFICATION_MODE_PERSISTENT.equals(notificationMode());
-        int count = realtime ? monitoredTaskStatusUrls.size() : 0;
-        String title = realtime
-                ? getString(R.string.task_connected_title)
-                : getString(R.string.background_service_title);
-        String content = realtime
-                ? count > 0
-                    ? getResources().getQuantityString(
-                            R.plurals.task_running_summary,
+        String primaryKey = primaryRunningTaskKey();
+        String title;
+        String content;
+        String threadId = "";
+        long startedAt = 0L;
+        boolean running = false;
+        if (!realtime) {
+            title = getString(R.string.background_service_title);
+            content = getString(R.string.background_service_text);
+        } else if (primaryKey == null) {
+            title = getString(R.string.task_connected_title);
+            content = getString(R.string.task_idle_text);
+        } else {
+            int count = monitoredTaskStatusUrls.size();
+            String name = normalizedTaskName(monitoredTaskNames.get(primaryKey));
+            Long taskStartedAt = monitoredTaskStartedAt.get(primaryKey);
+            running = true;
+            threadId = primaryKey;
+            startedAt = taskStartedAt == null ? 0L : taskStartedAt;
+            title = getString(R.string.task_running_title);
+            content = count <= 1
+                    ? name
+                    : getResources().getQuantityString(
+                            R.plurals.task_running_multi,
                             count,
+                            name,
                             count
-                    )
-                    : getString(R.string.task_idle_text)
-                : getString(R.string.background_service_text);
-        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                ? new Notification.Builder(this, NOTIFICATION_STATUS_CHANNEL_ID)
-                : new Notification.Builder(this);
-        builder.setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(title)
-                .setContentText(content)
-                .setStyle(new Notification.BigTextStyle().bigText(content))
-                .setContentIntent(pendingIntent)
-                .setOngoing(true)
-                .setOnlyAlertOnce(true)
-                .setShowWhen(false)
-                .setCategory(Notification.CATEGORY_SERVICE)
-                .setVisibility(Notification.VISIBILITY_PUBLIC);
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            builder.setPriority(Notification.PRIORITY_LOW);
+                    );
         }
-        manager.notify(PERSISTENT_NOTIFICATION_ID, builder.build());
+        String channelId = realtime
+                ? NOTIFICATION_LIVE_CHANNEL_ID
+                : NOTIFICATION_STATUS_CHANNEL_ID;
+        if (lastFallbackChannelId != null && !channelId.equals(lastFallbackChannelId)) {
+            manager.cancel(PERSISTENT_NOTIFICATION_ID);
+        }
+        lastFallbackChannelId = channelId;
+        manager.notify(
+                PERSISTENT_NOTIFICATION_ID,
+                TaskNotificationStyle.buildLiveNotification(
+                        this,
+                        PERSISTENT_NOTIFICATION_ID,
+                        channelId,
+                        title,
+                        content,
+                        threadId,
+                        startedAt,
+                        running
+                )
+        );
+    }
+
+    /** Channel backing the fallback foreground notification; a change needs a repost. */
+    private String lastFallbackChannelId;
+
+    /** Key of the monitored task that should own the live notification. */
+    private String primaryRunningTaskKey() {
+        String primaryKey = null;
+        long primaryStartedAt = Long.MAX_VALUE;
+        for (Map.Entry<String, String> entry : monitoredTaskStatusUrls.entrySet()) {
+            String key = entry.getKey();
+            if (key == null || key.trim().isEmpty()) continue;
+            Long startedAt = monitoredTaskStartedAt.get(key);
+            long value = startedAt == null ? Long.MAX_VALUE : startedAt;
+            if (primaryKey == null || value < primaryStartedAt) {
+                primaryKey = key;
+                primaryStartedAt = value;
+            }
+        }
+        return primaryKey;
     }
 
     private int taskNotificationId(String threadId, String threadName) {
@@ -5276,6 +5344,17 @@ public class MainActivity extends Activity {
         statusChannel.setDescription(getString(R.string.notification_channel_tasks));
         statusChannel.setShowBadge(true);
 
+        NotificationChannel liveChannel = new NotificationChannel(
+                NOTIFICATION_LIVE_CHANNEL_ID,
+                getString(R.string.notification_channel_live),
+                NotificationManager.IMPORTANCE_HIGH
+        );
+        liveChannel.setDescription(getString(R.string.notification_channel_live_description));
+        liveChannel.setSound(null, null);
+        liveChannel.enableVibration(false);
+        liveChannel.setShowBadge(false);
+        liveChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+
         NotificationChannel alertChannel = new NotificationChannel(
                 NOTIFICATION_ALERT_CHANNEL_ID,
                 getString(R.string.notification_channel_alerts),
@@ -5288,6 +5367,7 @@ public class MainActivity extends Activity {
         alertChannel.setShowBadge(true);
 
         manager.createNotificationChannel(statusChannel);
+        manager.createNotificationChannel(liveChannel);
         manager.createNotificationChannel(alertChannel);
         manager.deleteNotificationChannel("ai_mini_task_status_v3");
         manager.deleteNotificationChannel("ai_mini_task_alerts_v3");

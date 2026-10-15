@@ -113,6 +113,68 @@ final class TaskNotificationStyle {
     }
 
     /**
+     * Builds the ongoing "live" notification shared by the foreground service and
+     * the per-conversation running state.
+     *
+     * <p>Only platform-level live signals are used here on purpose: the ongoing
+     * flag, a chronometer anchored at the task start, and (while a task runs) an
+     * indeterminate progress bar. Those are exactly the signals Android 16
+     * promoted/progress notifications and vendor "capsule / 实况窗 / 灵动岛" surfaces
+     * promote, while a device that supports none of them still renders a normal
+     * ongoing notification.</p>
+     */
+    static Notification buildLiveNotification(
+            Context context,
+            int notificationId,
+            String channelId,
+            String title,
+            String content,
+            String threadId,
+            long startedAt,
+            boolean running
+    ) {
+        Intent launchIntent = new Intent(context, MainActivity.class)
+                .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra(MainActivity.EXTRA_OPEN_THREAD_ID, safeThreadId(threadId));
+        PendingIntent launchPendingIntent = PendingIntent.getActivity(
+                context,
+                notificationId,
+                launchIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        boolean chronometer = running && startedAt > 0L;
+        Notification.Builder builder = new Notification.Builder(context, channelId)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(title)
+                .setContentText(content)
+                .setStyle(new Notification.BigTextStyle().bigText(content))
+                .setContentIntent(launchPendingIntent)
+                .setOngoing(true)
+                .setAutoCancel(false)
+                .setOnlyAlertOnce(true)
+                .setShowWhen(chronometer)
+                .setWhen(chronometer ? startedAt : System.currentTimeMillis())
+                .setUsesChronometer(chronometer)
+                .setCategory(running
+                        ? Notification.CATEGORY_PROGRESS
+                        : Notification.CATEGORY_SERVICE)
+                .setVisibility(Notification.VISIBILITY_PUBLIC);
+        if (running) {
+            builder.setProgress(0, 0, true);
+        }
+        String shortCriticalText = running
+                ? context.getString(R.string.live_short_text_running)
+                : "";
+        Notification notification = LiveNotificationSupport
+                .decorate(context, builder, running, shortCriticalText)
+                .build();
+        if (running) {
+            LiveNotificationSupport.logPromotionState(context, notification);
+        }
+        return notification;
+    }
+
+    /**
      * Atomically claims one terminal alert for a task run.
      *
      * <p>The foreground service and MainActivity receive task state through
