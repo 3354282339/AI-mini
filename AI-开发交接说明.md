@@ -422,3 +422,34 @@ AI mini 从"只能连一种 WebUI"扩展为"多设备容器"：**一个网址 = 
 - zcode / dsh 目前**只做连接与切换**，没有任务状态通知、没有页面桥接（`page.js` 里的键盘/下载/任务钩子只对 miniapp WebUI 生效）。
 - `page.js` 依赖 UA 里的 `GPTMiniAndroidApp/` 标记判断"是否在 App 内"，改名时**故意没动**；若要为 zcode/dsh 注入各自的桥接脚本，需要按设备类型选择注入内容。
 
+## 7. 多设备通知与页面适配（当前实现）
+
+### 7.1 通知分两条路
+
+| 设备类型 | 状态来源 | 机制 |
+| --- | --- | --- |
+| 本地 WebUI（`miniapp`） | 服务端轮询 | `AIMiniNotificationService` 轮询 `/codex/status`、`/codex/threads`；`page.js` 同时 hook 页面 fetch 与 `codex:taskstate` 事件做前台快速上报 |
+| zcode / dsh / 其它 | 页面侧探测 | `assets/ai-mini/webui-watch.js` 观察页面任务活动，经原生桥上报 `webuiTaskState`，原生直接发通知，**不进入 Codex 轮询** |
+
+已核实的事实：**本地 WebUI（`D:\aicoding\mini\gpt-mini\server.js`）没有 SSE / WebSocket 推送**，路由只有 `/codex/status`、`/codex/threads`（含 `/codex/threads/revision`）、`/codex/gui-status`、`/codex/send` —— 所以轮询是唯一可行方式。
+**dsh（DeepSeek Hermes）是 WebSocket 推送**：`packages/api/gateway/src/stream-protocol.ts` 定义 `REMOTE_STREAM_MUX_PATH = '/api/remote.mux'`，帧类型 `ready` / `emit` / `waterfall` / `cancel`（`emit` 即 Host 事件推送）。
+**zcode 是 React SPA**（`https://zcode.z.ai/remote/v4/…`，Vite 构建，入口 `assets/index-*.js`），其接口在 bundle 内，尚未完整解析。
+
+### 7.2 通用探测的判定规则（`webui-watch.js`）
+
+- 长 HTTP 请求（fetch/XHR，时长 ≥ 1.5s）→ 任务活动
+- WebSocket 消息突发（5s 内 ≥ 4 条）→ 任务活动（覆盖 dsh 这种全程走 WS 的产品）
+- 短请求（页面自身轮询、心跳）被忽略，避免误报
+- 出现任务活动 → 上报 `running`；运行后静默 4s → 上报 `complete`
+- 页面若缺 `viewport` meta 则补一个（窄屏渲染修补）
+- 本地 WebUI 页面检测到 `window.__AIMiniGeckoPageBridge` 时只做修补、不探测，避免与 `page.js` 重复上报
+
+阈值都写在文件顶部常量里（`LONG_REQUEST_MS` / `WS_BURST` / `WS_WINDOW_MS` / `IDLE_DONE_MS`），真机误报时优先调这几个值。
+
+### 7.3 待办（需要更多信息才能做精确适配）
+
+1. **zcode**：需要完整下载并解析 `assets/index-*.js`（>6 MB，本轮下载被截断），找出它的消息/状态通道（WebSocket 或长轮询），才能拿到精确的"生成中/完成"事件。
+2. **dsh**：需要 `/api/remote.mux` 的握手细节与事件名清单（`packages/api/gateway` 里继续挖），或者一个有效的实例链接 —— 本轮用用户提供的地址访问返回 `401 dsh web authentication required`，token 已失效。
+3. **页面显示适配**：目前只有通用的 viewport 修补。dsh / zcode 的窄屏布局、输入框键盘行为需要各自的 CSS 注入，前提是能看到真实页面 DOM。
+
+
