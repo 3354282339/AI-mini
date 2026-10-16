@@ -5402,28 +5402,11 @@ public class MainActivity extends Activity {
     }
 
     private View buildSavedConnectionsDialog(Dialog dialog, List<SavedConnection> connections) {
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(18), dp(20), dp(18), dp(16));
-        panel.setBackground(strokedRect(
-                Color.rgb(5, 14, 31),
-                Color.argb(150, 77, 111, 171),
-                dp(24),
-                dp(1)
-        ));
+        final String[] filter = new String[]{"all"};
 
-        TextView title = new TextView(this);
-        title.setText(R.string.saved_connections);
-        title.setTextSize(22);
-        title.setTextColor(Color.WHITE);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        panel.addView(title);
-
-        TextView description = new TextView(this);
-        description.setText(R.string.saved_connections_description);
-        description.setTextSize(13);
-        description.setTextColor(Color.rgb(165, 178, 207));
-        description.setLineSpacing(dp(2), 1f);
+        LinearLayout panel = appDialogPanel();
+        panel.addView(appDialogTitle(getString(R.string.device_switch)));
+        TextView description = appDialogHint(getString(R.string.saved_connections_description));
         LinearLayout.LayoutParams descriptionParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -5431,37 +5414,111 @@ public class MainActivity extends Activity {
         descriptionParams.setMargins(0, dp(8), 0, dp(14));
         panel.addView(description, descriptionParams);
 
+        // 分类筛选：全部 + 各产品（只列出确实有设备的分类），便于多设备时快速筛选。
+        LinearLayout filterRow = new LinearLayout(this);
+        filterRow.setOrientation(LinearLayout.HORIZONTAL);
+        filterRow.setGravity(Gravity.CENTER_VERTICAL);
+        panel.addView(filterRow, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(false);
         LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        scrollParams.height = Math.min(dp(340), Math.max(dp(92), connections.size() * dp(82)));
+        scrollParams.height = dp(330);
         panel.addView(scroll, scrollParams);
 
-        LinearLayout list = new LinearLayout(this);
+        final LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         scroll.addView(list, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT,
                 ScrollView.LayoutParams.WRAP_CONTENT
         ));
 
-        if (connections.isEmpty()) {
-            TextView empty = new TextView(this);
-            empty.setText(R.string.saved_connections_empty);
-            empty.setTextSize(14);
-            empty.setTextColor(Color.rgb(145, 158, 188));
-            empty.setGravity(Gravity.CENTER);
-            list.addView(empty, new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    dp(92)
-            ));
-        } else {
-            for (SavedConnection connection : connections) {
-                list.addView(createSavedConnectionRow(dialog, connection, connections));
+        final Runnable[] renderer = new Runnable[1];
+        renderer[0] = () -> {
+            list.removeAllViews();
+            List<SavedConnection> all = readSavedConnections();
+            String currentUrl = preferences.getString(KEY_CURRENT_DEVICE_URL, "");
+            int shown = 0;
+            for (String kind : DEVICE_KINDS) {
+                if (!"all".equals(filter[0]) && !filter[0].equals(kind)) continue;
+                List<SavedConnection> group = new ArrayList<>();
+                for (SavedConnection candidate : all) {
+                    if (normalizeDeviceKind(candidate.kind).equals(kind)) group.add(candidate);
+                }
+                if (group.isEmpty()) continue;
+                list.addView(deviceGroupHeader(kind, group.size()));
+                for (SavedConnection candidate : group) {
+                    list.addView(deviceRowForDialog(
+                            dialog,
+                            candidate,
+                            sameConnectionUrl(candidate.url, currentUrl)
+                    ));
+                    shown += 1;
+                }
+            }
+            if (shown == 0) {
+                TextView empty = new TextView(this);
+                empty.setText(R.string.saved_connections_empty);
+                empty.setTextSize(13);
+                empty.setTextColor(Color.rgb(145, 158, 188));
+                empty.setGravity(Gravity.CENTER);
+                list.addView(empty, new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        dp(96)
+                ));
+            }
+        };
+
+        List<TextView> chipViews = new ArrayList<>();
+        List<String> chipKinds = new ArrayList<>();
+        chipKinds.add("all");
+        for (String kind : DEVICE_KINDS) {
+            for (SavedConnection candidate : connections) {
+                if (normalizeDeviceKind(candidate.kind).equals(kind)) {
+                    chipKinds.add(kind);
+                    break;
+                }
             }
         }
+        for (String kind : chipKinds) {
+            TextView chip = new TextView(this);
+            chip.setText("all".equals(kind)
+                    ? getString(R.string.device_filter_all)
+                    : deviceKindLabel(this, kind));
+            chip.setTextSize(11);
+            chip.setGravity(Gravity.CENTER);
+            chip.setPadding(dp(10), dp(8), dp(10), dp(8));
+            LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+            );
+            chipParams.setMargins(dp(3), 0, dp(3), 0);
+            chip.setOnClickListener(view -> {
+                filter[0] = kind;
+                for (int index = 0; index < chipViews.size(); index++) {
+                    styleFilterChip(
+                            chipViews.get(index),
+                            chipKinds.get(index),
+                            chipKinds.get(index).equals(kind)
+                    );
+                }
+                renderer[0].run();
+            });
+            chipViews.add(chip);
+            filterRow.addView(chip, chipParams);
+        }
+        for (int index = 0; index < chipViews.size(); index++) {
+            styleFilterChip(chipViews.get(index), chipKinds.get(index), index == 0);
+        }
+
+        renderer[0].run();
 
         TextView note = new TextView(this);
         note.setText(R.string.saved_connections_note);
@@ -5477,158 +5534,42 @@ public class MainActivity extends Activity {
         return panel;
     }
 
-    private View createSavedConnectionRow(
-            Dialog dialog,
-            SavedConnection connection,
-            List<SavedConnection> connections
-    ) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(9), dp(10), dp(9));
-        row.setBackground(strokedRect(
-                Color.argb(220, 13, 28, 56),
-                Color.argb(86, 86, 114, 171),
-                dp(17),
-                dp(1)
-        ));
-        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(72)
-        );
-        rowParams.setMargins(0, 0, 0, dp(10));
-        row.setLayoutParams(rowParams);
-
-        int accent = deviceKindAccent(connection.kind);
-        TextView badge = new TextView(this);
-        badge.setText(deviceKindBadge(connection.kind));
-        badge.setTextSize(11);
-        badge.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        badge.setTextColor(accent);
-        badge.setGravity(Gravity.CENTER);
-        badge.setBackground(strokedRect(
-                Color.argb(60, Color.red(accent), Color.green(accent), Color.blue(accent)),
-                accent,
-                dp(11),
-                dp(1)
-        ));
-        badge.setClickable(true);
-        badge.setContentDescription(getString(R.string.device_change_kind));
-        badge.setOnClickListener(view -> {
-            dialog.dismiss();
-            showDeviceKindEditor(connection);
-        });
-        row.addView(badge, new LinearLayout.LayoutParams(dp(46), dp(34)));
-
-        LinearLayout copy = new LinearLayout(this);
-        copy.setOrientation(LinearLayout.VERTICAL);
-        copy.setGravity(Gravity.CENTER_VERTICAL);
-        copy.setClickable(true);
-        copy.setOnClickListener(view -> {
-            dialog.dismiss();
-            loadUrl(connection.url);
-        });
-        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                1f
-        );
-        copyParams.setMargins(dp(10), 0, dp(8), 0);
-        row.addView(copy, copyParams);
-
-        TextView name = new TextView(this);
-        name.setText(connection.displayName(this));
-        name.setTextSize(15);
-        name.setTextColor(Color.WHITE);
-        name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        name.setSingleLine(true);
-        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        copy.addView(name);
-
-        EditText nameInput = new EditText(this);
-        nameInput.setSingleLine(true);
-        nameInput.setTextColor(Color.WHITE);
-        nameInput.setTextSize(15);
-        nameInput.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        nameInput.setHint(R.string.saved_connection_name_hint);
-        nameInput.setHintTextColor(Color.rgb(118, 134, 168));
-        nameInput.setPadding(0, 0, 0, 0);
-        nameInput.setBackgroundColor(Color.TRANSPARENT);
-        nameInput.setVisibility(View.GONE);
-        copy.addView(nameInput, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        ));
-
-        TextView url = new TextView(this);
-        url.setText(connection.url);
-        url.setTextSize(11);
-        url.setTextColor(Color.rgb(164, 177, 206));
-        url.setSingleLine(true);
-        url.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        LinearLayout.LayoutParams urlParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        urlParams.setMargins(0, dp(4), 0, 0);
-        copy.addView(url, urlParams);
-
-        ImageView edit = actionIconButton(R.drawable.ic_welcome_edit, false);
-        edit.setContentDescription(getString(R.string.saved_connection_edit));
-        final boolean[] editing = new boolean[]{false};
-        edit.setOnClickListener(view -> {
-            if (!editing[0]) {
-                editing[0] = true;
-                nameInput.setText(connection.name == null || connection.name.trim().isEmpty()
-                        ? connection.displayName(this)
-                        : connection.name.trim());
-                name.setVisibility(View.GONE);
-                nameInput.setVisibility(View.VISIBLE);
-                edit.setImageResource(R.drawable.ic_welcome_save);
-                nameInput.requestFocus();
-                nameInput.selectAll();
-                showSoftKeyboard(nameInput);
-                return;
+    /** 筛选 chip：选中用流光渐变，未选中用描边。 */
+    private void styleFilterChip(TextView chip, String kind, boolean selected) {
+        if ("all".equals(kind)) {
+            if (selected) {
+                chip.setTextColor(Color.rgb(10, 20, 32));
+                chip.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                chip.setBackground(roundedGradient(
+                        new int[]{Color.rgb(226, 240, 255), Color.rgb(122, 162, 232)},
+                        dp(14)
+                ));
+            } else {
+                chip.setTextColor(Color.rgb(196, 210, 234));
+                chip.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
+                chip.setBackground(strokedRect(
+                        Color.argb(72, 16, 30, 58),
+                        Color.argb(120, 122, 152, 202),
+                        dp(14),
+                        dp(1)
+                ));
             }
-            connection.name = nameInput.getText().toString().trim();
-            writeSavedConnections(connections);
-            name.setText(connection.displayName(this));
-            nameInput.setVisibility(View.GONE);
-            name.setVisibility(View.VISIBLE);
-            edit.setImageResource(R.drawable.ic_welcome_edit);
-            editing[0] = false;
-            hideSoftKeyboard(nameInput);
-        });
-        row.addView(edit, new LinearLayout.LayoutParams(dp(34), dp(34)));
+            return;
+        }
+        styleKindChip(chip, kind, selected);
+    }
 
-        ImageView delete = actionIconButton(R.drawable.ic_welcome_delete, true);
-        delete.setContentDescription(getString(R.string.delete));
-        delete.setOnClickListener(view -> {
+    /** 对话框里的设备行：点击即切换并关闭对话框。 */
+    private View deviceRowForDialog(Dialog dialog, SavedConnection connection, boolean current) {
+        View row = deviceRow(connection, current);
+        row.setOnClickListener(view -> {
             dialog.dismiss();
-            confirmDeleteDevice(connection);
+            connectToDevice(connection);
         });
-        LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(34), dp(34));
-        deleteParams.setMargins(dp(8), 0, 0, 0);
-        row.addView(delete, deleteParams);
+        row.setOnLongClickListener(null);
         return row;
     }
 
-    private ImageView actionIconButton(int drawableRes, boolean destructive) {
-        ImageView button = vectorIcon(
-                drawableRes,
-                destructive ? Color.rgb(255, 108, 120) : Color.rgb(131, 161, 255),
-                dp(7)
-        );
-        button.setBackground(roundedRect(
-                destructive ? Color.argb(42, 255, 74, 91) : Color.argb(40, 66, 104, 210),
-                dp(10)
-        ));
-        button.setClickable(true);
-        button.setFocusable(true);
-        return button;
-    }
-
-    /** Lets the user re-assign a saved device's family (local WebUI / zcode / dsh / …). */
     private void loadUrlFromWelcome() {
         loadUrl(welcomeUrlInput.getText().toString());
     }
@@ -9462,6 +9403,22 @@ public class MainActivity extends Activity {
                         message.optString("summary", ""),
                         message.optLong("durationMs", 0L)
                 ));
+                break;
+            case "webuiTaskState":
+                // 通用 WebUI 探测（zcode / dsh / 其它）：页面侧判定任务运行与完成，
+                // 原生只负责发通知，不把这些 URL 交给后台服务的 Codex 轮询。
+                handler.post(() -> {
+                    String genericState = normalizeTaskState(message.optString("status", ""));
+                    if (genericState.isEmpty()) return;
+                    showTaskStateNotification(
+                            message.optString("threadId", ""),
+                            message.optString("threadName", ""),
+                            genericState,
+                            message.optString("summary", ""),
+                            message.optLong("durationMs", 0L),
+                            message.optLong("startedAt", System.currentTimeMillis())
+                    );
+                });
                 break;
             default:
                 break;

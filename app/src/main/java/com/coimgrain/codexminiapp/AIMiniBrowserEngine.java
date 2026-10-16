@@ -35,11 +35,13 @@ final class AIMiniBrowserEngine {
     private NativeMessageHandler nativeMessageHandler;
     private String pageScript = "";
     private String bridgeScript = "";
+    private String watchScript = "";
     private boolean ready;
 
     AIMiniBrowserEngine(Context context) {
         appContext = context.getApplicationContext();
         pageScript = readAsset("ai-mini/page.js");
+        watchScript = readAsset("ai-mini/webui-watch.js");
         bridgeScript = buildBridgeScript();
         ready = true;
         handler.post(() -> {
@@ -80,8 +82,9 @@ final class AIMiniBrowserEngine {
     }
 
     String documentStartScript() {
-        // 顺序：page 逻辑 + WebView 原生桥
-        return pageScript + "\n" + bridgeScript;
+        // 顺序：本地 WebUI 逻辑（page.js）+ 通用任务监视（zcode/dsh/其它）+ 原生桥。
+        // webui-watch.js 会自行判断当前页面是否已由 page.js 接管，避免重复上报。
+        return pageScript + "\n" + watchScript + "\n" + bridgeScript;
     }
 
     String fontFaceCss() {
