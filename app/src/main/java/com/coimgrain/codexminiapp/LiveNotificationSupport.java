@@ -28,7 +28,7 @@ import java.util.Locale;
  * ongoing notification, never to a failure.</p>
  */
 final class LiveNotificationSupport {
-    private static final String TAG = "GPTMiniLiveNotify";
+    private static final String TAG = "AIMiniLiveNotify";
 
     /** Android 16 (API 36) introduced ProgressStyle and the promotion rules. */
     static final int API_ANDROID_16 = 36;

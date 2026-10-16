@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
 
 final class TaskNotificationStyle {
     private static final int MAX_SUMMARY_LENGTH = 520;
-    private static final String TASK_NOTIFICATION_GROUP = "app.gptmini.TASK_NOTIFICATIONS";
+    private static final String TASK_NOTIFICATION_GROUP = "app.aimini.TASK_NOTIFICATIONS";
     private static final Pattern MARKDOWN_LINK = Pattern.compile("!?\\[([^\\]]*)\\]\\([^)]*\\)");
     private static final Pattern MARKDOWN_HEADING = Pattern.compile("(?m)^#{1,6}\\s*");
     private static final Pattern MARKDOWN_MARKER = Pattern.compile("[*_~`]+");

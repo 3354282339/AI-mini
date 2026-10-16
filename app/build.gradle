@@ -1,7 +1,7 @@
 apply plugin: 'com.android.application'
 
 def releaseSigningProps = new Properties()
-def releaseSigningPropsFile = rootProject.file('keystore/release-signing.properties')
+def releaseSigningPropsFile = rootProject.file('keystore/ai-mini-signing.properties')
 if (releaseSigningPropsFile.exists()) {
     releaseSigningPropsFile.withInputStream { releaseSigningProps.load(it) }
 }
@@ -11,12 +11,12 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId 'app.gptmini.webview'
+        applicationId 'app.aimini'
         minSdk 26
         targetSdk 35
         versionCode 35
         versionName '2.0.3'
-        setProperty('archivesBaseName', 'GPT Mini-WebView-2.0.3')
+        setProperty('archivesBaseName', 'AI mini-2.0.3')
     }
 
     signingConfigs {

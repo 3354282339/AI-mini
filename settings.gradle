@@ -23,5 +23,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = 'GPTMiniWebViewAndroid'
+rootProject.name = 'AIMiniWebViewAndroid'
 include ':app'

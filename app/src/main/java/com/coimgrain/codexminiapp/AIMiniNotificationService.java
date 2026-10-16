@@ -34,9 +34,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class AIMiniNotificationService extends Service {
-    private static final String TAG = "GPTMiniTaskMonitor";
-    static final String ACTION_SYNC = "app.gptmini.action.SYNC_TASK_MONITOR";
-    static final String ACTION_WAKE_POLL = "app.gptmini.action.WAKE_TASK_MONITOR";
+    private static final String TAG = "AIMiniTaskMonitor";
+    static final String ACTION_SYNC = "app.aimini.action.SYNC_TASK_MONITOR";
+    static final String ACTION_WAKE_POLL = "app.aimini.action.WAKE_TASK_MONITOR";
     static final String EXTRA_RUNNING_COUNT = "running_count";
 
     private static final long POLL_INTERVAL_MS = 2500L;

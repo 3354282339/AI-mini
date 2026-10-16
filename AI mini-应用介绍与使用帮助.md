@@ -1,10 +1,10 @@
-# GPT Mini 应用介绍与使用帮助
+# AI mini 应用介绍与使用帮助
 
 ## 应用简介
 
-GPT Mini 是基于 Codex Mini WebUI 使用场景开发的 Android 手机 App。它保留了 WebUI 的核心体验，同时针对手机端 WebView、键盘适配、下载管理、通知提醒、多设备链接切换等使用问题进行了优化。
+AI mini 是基于 Codex Mini WebUI 使用场景开发的 Android 手机 App。它保留了 WebUI 的核心体验，同时针对手机端 WebView、键盘适配、下载管理、通知提醒、多设备链接切换等使用问题进行了优化。
 
-本 App 适合需要在 Android 手机上稳定访问 Codex Mini / GPT Mini WebUI 的用户使用。用户可以通过手动输入链接、扫码连接、继续上次连接、已保存连接等方式快速打开不同设备或不同服务地址。
+本 App 适合需要在 Android 手机上稳定访问 Codex Mini / AI mini WebUI 的用户使用。用户可以通过手动输入链接、扫码连接、继续上次连接、已保存连接等方式快速打开不同设备或不同服务地址。
 
 ## 相对原版的主要优化
 
@@ -44,7 +44,7 @@ GPT Mini 是基于 Codex Mini WebUI 使用场景开发的 Android 手机 App。�
 - 给连接设置备注名称，方便区分不同设备或不同 WebUI。
 - 删除不再需要的连接记录。
 
-这个功能适合有多个 Codex Mini / GPT Mini WebUI 地址的用户，比如家里电脑、公司电脑、服务器、公网地址、局域网地址等。
+这个功能适合有多个 Codex Mini / AI mini WebUI 地址的用户，比如家里电脑、公司电脑、服务器、公网地址、局域网地址等。
 
 ### 5. 悬浮窗功能
 
@@ -114,7 +114,7 @@ GPT Mini 是基于 Codex Mini WebUI 使用场景开发的 Android 手机 App。�
 
 ### 首次连接
 
-1. 打开 GPT Mini。
+1. 打开 AI mini。
 2. 在首页输入 WebUI 地址，或点击“扫码连接”扫描电脑端二维码。
 3. 点击连接后进入 WebUI。
 4. 连接成功后，该地址会自动保存，后续可以通过“继续上次连接”或“已保存连接”快速打开。

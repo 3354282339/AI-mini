@@ -6,7 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 
 public final class TaskNotificationActionReceiver extends BroadcastReceiver {
-    static final String ACTION_MARK_READ = "app.gptmini.action.MARK_TASK_NOTIFICATION_READ";
+    static final String ACTION_MARK_READ = "app.aimini.action.MARK_TASK_NOTIFICATION_READ";
     static final String EXTRA_NOTIFICATION_ID = "notification_id";
 
     @Override

@@ -1,10 +1,10 @@
-# GPT Mini Android 开发交接说明
+# AI mini Android 开发交接说明
 
 本文档用于把当前项目交给另一台电脑或另一个 AI 继续开发。它记录当前项目状态、已实现功能、关键文件、构建方式、签名信息和后续开发注意事项。
 
 ## 1. 项目概况
 
-项目名称：GPT Mini
+项目名称：AI mini
 
 项目类型：Android 原生 WebView App
 
@@ -14,14 +14,14 @@
 
 当前版本：
 
-- applicationId：`app.gptmini.webview`
+- applicationId：`app.aimini`
 - versionCode：`33`
 - versionName：`2.0.1`
-- App 显示名称：`GPT Mini`
+- App 显示名称：`AI mini`
 
 当前定位：
 
-这是一个为 Codex Mini / GPT Mini WebUI 优化的 Android 手机 App。核心仍是加载 WebUI，但针对 Android 手机上浏览器/WebView 使用中的键盘、下载、通知、连接切换、首页入口等问题做了原生层优化。
+这是一个为 Codex Mini / AI mini WebUI 优化的 Android 手机 App。核心仍是加载 WebUI，但针对 Android 手机上浏览器/WebView 使用中的键盘、下载、通知、连接切换、首页入口等问题做了原生层优化。
 
 ## 2. 目录结构
 
@@ -57,11 +57,11 @@
 - `scripts/build-release.sh`
   - release 构建脚本。
 
-- `keystore/gpt-mini-release.jks`
+- `keystore/ai-mini-release.jks`
   - release 签名证书。
   - 继续发布 `v1.1`、`v1.2` 等版本时必须继续使用这个证书。
 
-- `keystore/release-signing.properties`
+- `keystore/ai-mini-signing.properties`
   - release 签名配置。
   - 包含证书路径、别名和密码。
 
@@ -69,7 +69,7 @@
 
 ### 3.1 WebView 基础功能
 
-- 加载 Codex Mini / GPT Mini WebUI。
+- 加载 Codex Mini / AI mini WebUI。
 - 支持 HTTP 和 HTTPS。
 - 支持文件选择。
 - 支持页面权限请求。
@@ -233,13 +233,13 @@ App 不会直接把 WebView 地址栏改成局域网地址。
 当前正式包：
 
 - 输出位置：`outputs/GPTMini-1.0-release.apk`
-- 原始 Gradle 输出：`app/build/outputs/apk/release/GPT Mini-1.0-release.apk`
+- 原始 Gradle 输出：`app/build/outputs/apk/release/AI mini-1.0-release.apk`
 
 已验证：
 
 - release v1/v2 签名通过。
 - zipalign 通过。
-- 包名：`app.gptmini`
+- 包名：`app.gptmini`（历史记录，旧版标识；当前 AI mini 使用 `app.aimini`）
 - 版本：`1.0`
 
 如果用户之前安装的是 debug 包，可能因为签名不同不能直接覆盖安装，需要先卸载 debug 版。
@@ -286,8 +286,8 @@ App 不会直接把 WebView 地址栏改成局域网地址。
 
 release 签名文件：
 
-- `keystore/gpt-mini-release.jks`
-- `keystore/release-signing.properties`
+- `keystore/ai-mini-release.jks`
+- `keystore/ai-mini-signing.properties`
 
 这两个文件对后续升级非常重要。
 
@@ -321,7 +321,7 @@ release 签名文件：
 
 - 新增 release 签名配置。
 - 生成 release 签名证书。
-- 打包 `GPT Mini v1.0 release`。
+- 打包 `AI mini v1.0 release`。
 - 下载界面新增分享按钮。
 - 下载文件名改为最多两行。
 - 下载完成状态和下载时间合并到一行显示。
@@ -379,8 +379,8 @@ release 签名文件：
 验证 release APK：
 
 ```bash
-.tools/android-sdk/build-tools/35.0.0/apksigner verify --verbose "app/build/outputs/apk/release/GPT Mini-1.0-release.apk"
-.tools/android-sdk/build-tools/35.0.0/zipalign -c -p 4 "app/build/outputs/apk/release/GPT Mini-1.0-release.apk"
+.tools/android-sdk/build-tools/35.0.0/apksigner verify --verbose "app/build/outputs/apk/release/AI mini-1.0-release.apk"
+.tools/android-sdk/build-tools/35.0.0/zipalign -c -p 4 "app/build/outputs/apk/release/AI mini-1.0-release.apk"
 ```
 
 如果新电脑没有 `.tools`，请改用新电脑 Android SDK 对应的 `apksigner` 和 `zipalign` 路径。

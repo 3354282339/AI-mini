@@ -43,9 +43,11 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.text.InputType;
 import android.util.Base64;
 import android.util.Log;
@@ -176,7 +178,7 @@ public class MainActivity extends Activity {
     private static final int DEFAULT_CONVERSATION_FONT_SCALE = 100;
     private static final int MIN_CONVERSATION_FONT_SCALE = 50;
     private static final int MAX_CONVERSATION_FONT_SCALE = 200;
-    private static final String NAVIGATION_LOG_TAG = "GPTMiniNavigation";
+    private static final String NAVIGATION_LOG_TAG = "AIMiniNavigation";
     private static final int WEB_CONTENT_BACKGROUND_COLOR = 0xFF0D0D0D;
     private static final long MAIN_NAVIGATION_MIN_REVEAL_DELAY_MS = 180L;
     private static final long MAIN_NAVIGATION_MAX_REVEAL_DELAY_MS = 1500L;
@@ -282,6 +284,11 @@ public class MainActivity extends Activity {
     private TextView conversationFontScaleValue;
     private TextView notificationModeValue;
     private TextView notificationLiveSurfaceValue;
+    private TextView permissionStatusValue;
+    /** True while the one-tap permission wizard is walking through the system dialogs. */
+    private boolean permissionSetupFlowRunning;
+    /** Items the current wizard run already offered, so a denial cannot loop forever. */
+    private final Set<String> permissionSetupAsked = new HashSet<>();
     private TextView notificationEndOption;
     private TextView notificationPersistentOption;
     private TextView miniMenuVersionText;
@@ -428,7 +435,7 @@ public class MainActivity extends Activity {
         registerNetworkRouteWatcher();
         requestLegacyStoragePermissionIfNeeded();
         requestNotificationPermissionIfNeeded();
-        // Once the user has opened GPT Mini, keep one foreground-service
+        // Once the user has opened AI mini, keep one foreground-service
         // notification alive in either task-notification mode. This is the
         // lowest-permission Android mechanism available for improving background
         // task monitoring reliability.
@@ -1375,6 +1382,19 @@ public class MainActivity extends Activity {
         notificationLiveSurfaceValue.setTextSize(12);
         notificationLiveSurfaceValue.setPadding(dp(10), dp(6), dp(10), dp(2));
         notificationSettingsPanel.addView(notificationLiveSurfaceValue);
+
+        notificationSettingsPanel.addView(settingsActionButton(
+                R.string.permission_setup_action,
+                this::requestMissingPermissions
+        ));
+        permissionStatusValue = settingsLabel("");
+        permissionStatusValue.setTextSize(12);
+        permissionStatusValue.setPadding(dp(10), dp(6), dp(10), dp(2));
+        notificationSettingsPanel.addView(permissionStatusValue);
+        notificationSettingsPanel.addView(settingsActionButton(
+                R.string.permission_open_system_settings,
+                this::openSystemNotificationSettings
+        ));
 
         View notificationHelpRow = createMiniNavRow(
                 getString(R.string.notification_help_title),
@@ -2811,6 +2831,132 @@ public class MainActivity extends Activity {
                             + LiveNotificationSupport.surfaceDescription(this)
             );
         }
+        if (permissionStatusValue != null) {
+            permissionStatusValue.setText(permissionStatusText());
+        }
+    }
+
+    /** A tappable settings row that follows the mini-menu theme like the other buttons. */
+    private TextView settingsActionButton(int textRes, Runnable action) {
+        TextView button = new TextView(this);
+        button.setTextSize(13);
+        button.setGravity(Gravity.CENTER_VERTICAL);
+        button.setPadding(dp(12), 0, dp(12), 0);
+        button.setOnClickListener(view -> action.run());
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(42)
+        );
+        params.setMargins(0, dp(8), 0, 0);
+        button.setLayoutParams(params);
+        button.setTag(textRes);
+        miniMenuButtons.add(button);
+        return button;
+    }
+
+    /**
+     * One-tap permission setup. Each step raises the matching system dialog, so the user
+     * only has to tap “允许”; after every dialog the wizard continues with the next
+     * missing item and finally reports the remaining state on the settings panel.
+     */
+    private void requestMissingPermissions() {
+        if (needsNotificationPermission() && permissionSetupAsked.add("notification")) {
+            permissionSetupFlowRunning = true;
+            requestPermissions(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    NOTIFICATION_PERMISSION_REQUEST
+            );
+            return;
+        }
+        if (needsCameraPermission() && permissionSetupAsked.add("camera")) {
+            permissionSetupFlowRunning = true;
+            requestPermissions(
+                    new String[]{Manifest.permission.CAMERA},
+                    CAMERA_PERMISSION_REQUEST
+            );
+            return;
+        }
+        if (!isIgnoringBatteryOptimizations() && permissionSetupAsked.add("battery")) {
+            permissionSetupFlowRunning = true;
+            requestBatteryOptimizationExemption();
+            return;
+        }
+        // Every item has been offered once (or is already granted). Stop here so that a
+        // declined permission cannot loop the wizard, and report what is still missing.
+        permissionSetupFlowRunning = false;
+        permissionSetupAsked.clear();
+        updateNotificationSettingsLabels();
+        Toast.makeText(this, permissionStatusText(), Toast.LENGTH_LONG).show();
+    }
+
+    private boolean needsNotificationPermission() {
+        return Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean needsCameraPermission() {
+        return checkSelfPermission(Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean isIgnoringBatteryOptimizations() {
+        PowerManager powerManager = getSystemService(PowerManager.class);
+        return powerManager == null
+                || powerManager.isIgnoringBatteryOptimizations(getPackageName());
+    }
+
+    /**
+     * Asks the system to exempt the app from battery optimisation. The ROM shows its own
+     * confirmation dialog, so the user only taps “允许”. Falls back to the battery
+     * settings list on ROMs that do not expose the direct request screen.
+     */
+    @SuppressLint("BatteryLife")
+    private void requestBatteryOptimizationExemption() {
+        if (isIgnoringBatteryOptimizations()) return;
+        try {
+            startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(Uri.parse("package:" + getPackageName())));
+        } catch (Exception error) {
+            try {
+                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Exception ignored) {
+                Toast.makeText(this, R.string.permission_battery_manual, Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    /** Human readable summary of everything the permission wizard still needs. */
+    private String permissionStatusText() {
+        List<String> missing = new ArrayList<>();
+        if (needsNotificationPermission()) {
+            missing.add(getString(R.string.permission_label_notification));
+        }
+        if (needsCameraPermission()) {
+            missing.add(getString(R.string.permission_label_camera));
+        }
+        if (!isIgnoringBatteryOptimizations()) {
+            missing.add(getString(R.string.permission_label_battery));
+        }
+        if (missing.isEmpty()) return getString(R.string.permission_status_all_granted);
+        return getString(R.string.permission_status_missing, String.join("、", missing));
+    }
+
+    /**
+     * Opens the system notification page for this app. Vendor ROMs keep the capsule /
+     * 实况窗 / 焦点通知 switch there, and Android has no API to toggle it for the user.
+     */
+    private void openSystemNotificationSettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
+        } catch (Exception error) {
+            try {
+                startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(Uri.parse("package:" + getPackageName())));
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private void updateOptionButton(TextView button, boolean selected) {
@@ -3870,7 +4016,7 @@ public class MainActivity extends Activity {
         }
 
         // 百度等网页会自动尝试 baiduboxapp:// 一类 App Scheme。
-        // 这类跳转会触发系统“GPT Mini 想要打开百度”的确认框，统一拦截。
+        // 这类跳转会触发系统“AI mini 想要打开百度”的确认框，统一拦截。
         if (!isAllowedExternalScheme(scheme)) return;
 
         // 只有明确的用户功能协议（例如 tel:、mailto:）才允许交给系统处理。
@@ -7410,7 +7556,7 @@ public class MainActivity extends Activity {
             startActivity(intent);
             Toast.makeText(this, R.string.opening_file, Toast.LENGTH_SHORT).show();
         } catch (Exception error) {
-            Log.w("GPTMiniDownload", "Unable to open downloaded file " + item.fileName, error);
+            Log.w("AIMiniDownload", "Unable to open downloaded file " + item.fileName, error);
             Toast.makeText(this, R.string.no_app_for_file, Toast.LENGTH_SHORT).show();
         }
     }
@@ -7593,7 +7739,7 @@ public class MainActivity extends Activity {
                 boolean physicalDeleted = deletePhysicalDownload(existingUri, localPath);
                 if (!physicalDeleted) {
                     Log.w(
-                            "GPTMiniDownload",
+                            "AIMiniDownload",
                             "DownloadManager record removed but file remains: " + localPath
                     );
                 }
@@ -7733,6 +7879,9 @@ public class MainActivity extends Activity {
                 );
         activityBackgroundedAtElapsed = 0L;
         requestInterfaceInsets();
+        // Returning from a system permission dialog (or from the ROM's notification page)
+        // must refresh the permission summary shown in the notification settings panel.
+        if (permissionStatusValue != null) updateNotificationSettingsLabels();
         // The Service may have completed and removed tasks while Gecko/Activity was
         // suspended. Reconcile the in-memory maps before refreshing notifications.
         restoreMonitoredTasks();
@@ -7935,16 +8084,29 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        boolean granted = grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED;
         if (requestCode == CAMERA_PERMISSION_REQUEST) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (permissionSetupFlowRunning) {
+                // Raised by the one-tap wizard: continue the wizard instead of jumping
+                // straight into a QR scan.
+                updateNotificationSettingsLabels();
+                requestMissingPermissions();
+                return;
+            }
+            if (granted) {
                 handler.postDelayed(this::startQrScan, 350);
             } else {
                 Toast.makeText(this, R.string.camera_permission_denied, Toast.LENGTH_SHORT).show();
             }
-        } else if (requestCode == NOTIFICATION_PERMISSION_REQUEST
-                && grantResults.length > 0
-                && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            syncNotificationMonitorService();
+        } else if (requestCode == NOTIFICATION_PERMISSION_REQUEST) {
+            if (granted) {
+                syncNotificationMonitorService();
+            }
+            if (permissionSetupFlowRunning) {
+                updateNotificationSettingsLabels();
+                requestMissingPermissions();
+            }
         }
     }
 
