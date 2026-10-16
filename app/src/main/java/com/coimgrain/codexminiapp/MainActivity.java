@@ -170,9 +170,9 @@ public class MainActivity extends Activity {
     private static final String KEY_FLOAT_MENU_THEME = "float_menu_theme";
     private static final String KEY_NATIVE_LIQUID_GLASS = "native_liquid_glass";
     private static final String GITHUB_LATEST_RELEASE_API =
-            "https://api.github.com/repos/3584569425/GPT-Mini-Android/releases?per_page=20";
+            "https://api.github.com/repos/3354282339/AI-mini/releases?per_page=20";
     private static final String GITHUB_REPOSITORY_URL =
-            "https://github.com/3584569425/GPT-Mini-Android";
+            "https://github.com/3354282339/AI-mini";
     private static final String FLOAT_MENU_THEME_DARK = "dark";
     private static final String FLOAT_MENU_THEME_LIGHT = "light";
     private static final String FLOAT_MENU_THEME_SYSTEM = "system";
@@ -2405,12 +2405,12 @@ public class MainActivity extends Activity {
             return;
         }
         String fileName = updateAssetName == null || updateAssetName.trim().isEmpty()
-                ? "GPT-Mini-WebView-" + updateLatestVersion + ".apk"
+                ? "AI-mini-" + updateLatestVersion + ".apk"
                 : safeFileName(updateAssetName);
         hideMiniMenu();
         startHttpDownload(
                 updateDownloadUrl,
-                "GPT-Mini-Android/" + currentAppVersionName(),
+                "AI-mini-Android/" + currentAppVersionName(),
                 contentDispositionForName(fileName),
                 "application/vnd.android.package-archive",
                 ""
@@ -2477,6 +2477,10 @@ public class MainActivity extends Activity {
         String downloadUrl = "";
         String assetName = "";
         if (assets != null) {
+            // Prefer a WebView-flavoured asset name (the old release naming), but fall
+            // back to any other APK: the AI-mini repository only publishes one build.
+            String fallbackUrl = "";
+            String fallbackName = "";
             for (int i = 0; i < assets.length(); i++) {
                 JSONObject asset = assets.optJSONObject(i);
                 if (asset == null) continue;
@@ -2487,7 +2491,7 @@ public class MainActivity extends Activity {
                     continue;
                 }
                 String lower = candidateName.toLowerCase(Locale.ROOT);
-                // WebView 与 GeckoView 是两个不同内核版本，不能互相更新。
+                // GeckoView builds are a different kernel and must never auto-update this app.
                 if (lower.contains("gecko")) continue;
                 if (lower.contains("webview")
                         || lower.contains("web-view")
@@ -2496,6 +2500,14 @@ public class MainActivity extends Activity {
                     assetName = candidateName;
                     break;
                 }
+                if (fallbackUrl.isEmpty()) {
+                    fallbackUrl = candidateUrl;
+                    fallbackName = candidateName;
+                }
+            }
+            if (downloadUrl.isEmpty()) {
+                downloadUrl = fallbackUrl;
+                assetName = fallbackName;
             }
         }
         String notes = release.optString("body", "").trim();
