@@ -88,11 +88,19 @@ final class AIMiniBrowserEngine {
     }
 
     String documentStartScript() {
-        // 顺序：设备类型标记 + 本地 WebUI 逻辑（page.js）+ 通用任务监视 + 原生桥。
-        // webui-watch.js 依据 __AIMiniDeviceKind 选择产品专用适配（如 dsh 的 WS 事件），
-        // 并在 page.js 已接管的页面上只做修补、不重复探测。
-        return "window.__AIMiniDeviceKind=" + JSONObject.quote(deviceKind) + ";\n"
-                + pageScript + "\n" + watchScript + "\n" + bridgeScript;
+        StringBuilder script = new StringBuilder();
+        script.append("window.__AIMiniDeviceKind=")
+                .append(JSONObject.quote(deviceKind))
+                .append(";\n");
+        // page.js 是为 GPT（本地 WebUI）定制的：液态玻璃样式、字体、键盘钩子、任务钩子、
+        // 下载钩子等。它绝不能注入 dsh / zcode 等其它产品，否则会把对方原生界面改造成
+        // GPT 的样子（曾出现过这个问题）。
+        if (MainActivity.DEVICE_KIND_MINIAPP.equals(deviceKind)) {
+            script.append(pageScript).append("\n");
+        }
+        // 通用任务监视（含移动端基础修补）与原生桥对所有设备生效。
+        script.append(watchScript).append("\n").append(bridgeScript);
+        return script.toString();
     }
 
     String fontFaceCss() {

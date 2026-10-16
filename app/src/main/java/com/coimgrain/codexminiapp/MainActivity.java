@@ -2606,6 +2606,8 @@ public class MainActivity extends Activity {
 
     private void requestInterfaceInsets() {
         updateTopInsetArea();
+        // 状态栏高度可能在启动后才就绪，或随横竖屏/系统栏变化，这里一并重算。
+        applyDeviceTopInset();
         if (appHost == null) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             appHost.requestApplyInsets();
@@ -4318,12 +4320,12 @@ public class MainActivity extends Activity {
         return context.getString(R.string.device_kind_miniapp);
     }
 
-    /** Short badge text for a device row: Web / ZC / DSH / URL. */
+    /** Short badge text for a device row: GPT / ZC / DSH / URL. */
     static String deviceKindBadge(String kind) {
         if (DEVICE_KIND_ZCODE.equals(kind)) return "ZC";
         if (DEVICE_KIND_DSH.equals(kind)) return "DSH";
         if (DEVICE_KIND_OTHER.equals(kind)) return "URL";
-        return "Web";
+        return "GPT";
     }
 
     /**
@@ -4488,6 +4490,14 @@ public class MainActivity extends Activity {
 
     /** 一台设备的卡片：流光竖条 + 类型徽标 + 名称/主机；点击进入，⋯ 或长按管理。 */
     private View deviceRow(SavedConnection connection, boolean current) {
+        return deviceRow(connection, current, true);
+    }
+
+    /**
+     * @param withActions true 显示 ⋯ 与长按菜单（首页用）；
+     *                    false 只保留"点击即切换"（悬浮窗切换列表用，管理操作统一在首页做）
+     */
+    private View deviceRow(SavedConnection connection, boolean current, boolean withActions) {
         String kind = normalizeDeviceKind(connection.kind);
         int[] gradient = deviceKindGradient(kind);
 
@@ -4570,26 +4580,30 @@ public class MainActivity extends Activity {
             row.addView(currentTag);
         }
 
-        TextView more = new TextView(this);
-        more.setText("⋯");
-        more.setTextSize(18);
-        more.setTextColor(Color.rgb(172, 186, 214));
-        more.setGravity(Gravity.CENTER);
-        more.setPadding(dp(10), dp(4), dp(6), dp(4));
-        more.setContentDescription(getString(R.string.device_manage));
-        more.setOnClickListener(view -> showDeviceActionsDialog(connection));
-        LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        moreParams.setMargins(dp(6), 0, 0, 0);
-        row.addView(more, moreParams);
+        if (withActions) {
+            TextView more = new TextView(this);
+            more.setText("⋯");
+            more.setTextSize(18);
+            more.setTextColor(Color.rgb(172, 186, 214));
+            more.setGravity(Gravity.CENTER);
+            more.setPadding(dp(10), dp(4), dp(6), dp(4));
+            more.setContentDescription(getString(R.string.device_manage));
+            more.setOnClickListener(view -> showDeviceActionsDialog(connection));
+            LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+            );
+            moreParams.setMargins(dp(6), 0, 0, 0);
+            row.addView(more, moreParams);
+        }
 
         row.setOnClickListener(view -> connectToDevice(connection));
-        row.setOnLongClickListener(view -> {
-            showDeviceActionsDialog(connection);
-            return true;
-        });
+        if (withActions) {
+            row.setOnLongClickListener(view -> {
+                showDeviceActionsDialog(connection);
+                return true;
+            });
+        }
         LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -5269,6 +5283,47 @@ public class MainActivity extends Activity {
     }
 
     /**
+     * 非 GPT 设备（zcode / dsh / 其它）的页面不会处理 Android 安全区 —— 它们的顶部
+     * 工具栏通常是 fixed/sticky 定位，往页面里注入 padding 也压不下去，所以由原生在
+     * WebView 容器顶部留出状态栏高度，状态栏区域用深色背景与这两个产品的深色主题衔接。
+     * GPT 设备保持原样：它的页面用 --ai-mini-top-inset 自己下移顶部功能栏。
+     */
+    private void applyDeviceTopInset() {
+        if (browserFrame == null) return;
+        boolean needsInset = !DEVICE_KIND_MINIAPP.equals(
+                normalizeDeviceKind(selectedDeviceKind)
+        );
+        int top = needsInset ? statusBarHeightPx() : 0;
+        if (browserFrame.getPaddingTop() != top) {
+            browserFrame.setPadding(0, top, 0, 0);
+            browserFrame.setClipToPadding(false);
+        }
+        browserFrame.setBackgroundColor(needsInset
+                ? Color.rgb(11, 18, 32)
+                : WEB_CONTENT_BACKGROUND_COLOR);
+    }
+
+    /** 状态栏高度（优先取真实 insets，取不到时回退系统资源）。 */
+    private int statusBarHeightPx() {
+        try {
+            WindowInsets insets = getWindow() == null
+                    ? null
+                    : getWindow().getDecorView().getRootWindowInsets();
+            if (insets != null) {
+                int top = insets.getInsets(WindowInsets.Type.statusBars()).top;
+                if (top > 0) return top;
+            }
+        } catch (Exception ignored) {
+        }
+        int resourceId = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        if (resourceId > 0) {
+            int value = getResources().getDimensionPixelSize(resourceId);
+            if (value > 0) return value;
+        }
+        return dp(28);
+    }
+
+    /**
      * Remembers which device the WebView is currently showing. The device switcher, the
      * welcome list and the background task monitor all key off this.
      */
@@ -5285,6 +5340,10 @@ public class MainActivity extends Activity {
         updateDeviceKindPickerLabel();
         refreshWelcomeDevices();
         refreshMiniMenuDeviceSubtitle();
+        // 设备切换会改变"是否需要原生留出状态栏高度"，立即重算。
+        applyDeviceTopInset();
+        // 刚切换时 insets 可能还没下发，稍后再校一次。
+        handler.postDelayed(this::applyDeviceTopInset, 300);
     }
 
     /** Subtitle of the floating menu's device row: family + name of the active device. */
@@ -5601,9 +5660,9 @@ public class MainActivity extends Activity {
         styleKindChip(chip, kind, selected);
     }
 
-    /** 对话框里的设备行：点击即切换并关闭对话框。 */
+    /** 对话框里的设备行：只做切换（不带 ⋯ / 长按菜单），点击即切过去并关闭对话框。 */
     private View deviceRowForDialog(Dialog dialog, SavedConnection connection, boolean current) {
-        View row = deviceRow(connection, current);
+        View row = deviceRow(connection, current, false);
         row.setOnClickListener(view -> {
             dialog.dismiss();
             connectToDevice(connection);

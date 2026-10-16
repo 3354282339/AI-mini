@@ -458,7 +458,24 @@ zcode 的协议要在注入脚本里复刻编解码不划算，所以维持兜�
 
 顺带确认：**dsh 前端是响应式设计**（`@container (max-width: 560px)`、`--dsh-composer-card-max-width: min(calc(100% - 16px), 952px)`），手机上不需要额外布局修补；zcode 的 UI 本身自带"流光"组件（bundle 里的 `--beam-strength`、`hueRange`、`colorVariant: 'colorful'|'mono'`），与我们在设备卡片上给的"黑白流光"配色一致。
 
-### 7.4 真机调试入口
+### 7.5 注入策略与安全区（重要，曾踩坑）
+
+**注入按设备类型分派**（`AIMiniBrowserEngine.documentStartScript`）：
+
+| 设备类型 | page.js | webui-watch.js | 原生桥 |
+| --- | --- | --- | --- |
+| `miniapp`（GPT） | ✅ 注入 | ✅（检测到 page.js 后只做修补） | ✅ |
+| `zcode` / `dsh` / `other` | ❌ **不注入** | ✅ | ✅ |
+
+`page.js` 是给 GPT 定制的（液态玻璃样式、字体、键盘钩子、任务钩子、下载钩子）。**早期版本把它无差别注入到所有设备**，导致 dsh / zcode 的页面被注入样式与钩子，看起来"变成了 GPT 的界面"——现已按类型隔离。新增产品时如果发现界面被改造，先检查这里。
+
+**状态栏安全区**：GPT 的页面用 CSS 变量 `--ai-mini-top-inset` 自己把顶部功能栏下移（所以 WebView 可以延伸到状态栏下方）。zcode / dsh 等页面不知道这个变量，且它们的顶栏多为 `fixed/sticky`，往页面里注 padding 压不下去 —— 因此由原生在 `browserFrame` 顶部留出状态栏高度（`applyDeviceTopInset()` / `statusBarHeightPx()`），状态栏区域用深色 `rgb(11,18,32)` 与两个产品的深色主题衔接；切回 GPT 设备时自动恢复为 0。
+
+**设备名与徽标**：`miniapp` 的中文名是「GPT」，徽标缩写 `GPT`（zcode → `ZC`，dsh → `DSH`，其它 → `URL`）。
+
+**悬浮窗切换列表只做切换**：`deviceRow(..., withActions=false)` 不显示 ⋯、不挂长按菜单；重命名 / 改类型 / 删除统一在首页的设备卡片上做（⋯ 或长按）。
+
+### 7.6 真机调试入口
 
 页面里注入了探针函数，可用 WebView 调试或在代码里 `evaluateJavascript` 读取：
 
