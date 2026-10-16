@@ -9,6 +9,8 @@
 - 应用名：`AI mini`
 - versionName：`1.0.0`
 - versionCode：`1`
+- 仓库：<https://github.com/3354282339/AI-mini>
+- 下载安装包：<https://github.com/3354282339/AI-mini/releases/latest>
 - applicationId：`app.aimini`（与旧版 `app.gptmini.webview`、Gecko 版 `app.gptmini` 互不冲突，可同时安装）
 - 最低系统：Android 8.0（API 26）
 - 浏览器内核：系统 WebView
