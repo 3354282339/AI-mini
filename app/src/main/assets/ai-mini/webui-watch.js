@@ -35,15 +35,39 @@
     "生成中",
     "正在生成",
     "思考中",
+    "思考",
     "stop generating",
     "stop response",
     "stop output",
     "stop the run",
-    "generating"
+    "generating",
+    "thinking"
+  ];
+  /**
+   * 运行中才会出现的元素特征（class / 属性），来自各产品实测：
+   * - zcode：`animated-gradient-text` 是"思考中"的渐变文字
+   *   （bundle 内 i18n key `chat.reasoning.thinking`，仅 isStreaming 时渲染）
+   */
+  var BUSY_SELECTORS = [
+    ".animated-gradient-text",
+    "[class*='animated-gradient-text']",
+    "[data-zcode-chat-loading-slot]",
+    "[class*='reasoning-thinking']",
+    "[class*='stop-generat']",
+    "[data-testid*='stop-generat']"
   ];
   /** 按钮特征词（属性层），与 BUSY_TEXTS 组合判断。 */
   var BUSY_ATTRIBUTE_HINTS = ["stop", "interrupt", "cancel"];
-  var BUSY_ATTRIBUTE_TARGETS = ["generat", "response", "run", "stream", "agent", "task"];
+  var BUSY_ATTRIBUTE_TARGETS = [
+    "generat",
+    "response",
+    "run",
+    "stream",
+    "agent",
+    "task",
+    "think",
+    "reason"
+  ];
 
   var LONG_REQUEST_MS = 1500;
   var WS_BURST = 4;
@@ -87,9 +111,15 @@
     });
   }
 
-  /** 页面上是否存在「可打断当前任务」的按钮 —— 最可靠的运行中信号。 */
+  /** 页面上是否存在「可打断当前任务」的按钮或运行中标志 —— 最可靠的运行中信号。 */
   function domBusy() {
     try {
+      for (var s = 0; s < BUSY_SELECTORS.length; s++) {
+        var marked = document.querySelector(BUSY_SELECTORS[s]);
+        if (marked && (marked.offsetParent !== null || marked.getClientRects().length > 0)) {
+          return true;
+        }
+      }
       var nodes = document.querySelectorAll(
         'button,[role="button"],[aria-label],[data-testid],[title]'
       );
