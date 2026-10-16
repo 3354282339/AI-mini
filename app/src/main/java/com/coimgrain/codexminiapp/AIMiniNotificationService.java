@@ -543,6 +543,27 @@ public final class AIMiniNotificationService extends Service {
                 .commit();
     }
 
+    /** 通知归属的设备类型（决定通知大图配色）。 */
+    private String currentDeviceKind() {
+        if (preferences == null) return MainActivity.DEVICE_KIND_MINIAPP;
+        return MainActivity.normalizeDeviceKind(
+                preferences.getString(
+                        MainActivity.KEY_CURRENT_DEVICE_KIND,
+                        MainActivity.DEVICE_KIND_MINIAPP
+                )
+        );
+    }
+
+    /** 通知归属的设备网址：点击通知时据此切回对应设备。 */
+    private String currentDeviceUrl() {
+        if (preferences == null) return "";
+        String url = preferences.getString(MainActivity.KEY_CURRENT_DEVICE_URL, "");
+        if (url == null || url.trim().isEmpty()) {
+            url = preferences.getString(MainActivity.KEY_LAST_URL, "");
+        }
+        return url == null ? "" : url.trim();
+    }
+
     private ConnectionInfo connectionInfo() {
         // zcode / dsh / custom devices are plain WebUIs without the Codex status API, so
         // the monitor keeps the foreground notice alive but does not poll them.
@@ -779,7 +800,9 @@ public final class AIMiniNotificationService extends Service {
                 name,
                 error,
                 summary,
-                durationMs
+                durationMs,
+                currentDeviceUrl(),
+                currentDeviceKind()
         );
         manager.cancel(notificationId);
         manager.notify(notificationId, notification);

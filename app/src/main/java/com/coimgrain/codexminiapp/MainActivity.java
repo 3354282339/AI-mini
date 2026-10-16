@@ -186,6 +186,8 @@ public class MainActivity extends Activity {
      */
     static final String NOTIFICATION_LIVE_CHANNEL_ID = "ai_mini_task_live_v5";
     static final String EXTRA_OPEN_THREAD_ID = "open_notification_thread_id";
+    /** 通知所属的设备网址：点击通知时先切到这台设备，再打开会话。 */
+    static final String EXTRA_OPEN_DEVICE_URL = "open_notification_device_url";
     private static final String LEGACY_NOTIFICATION_CHANNEL_ID = "gpt_mini_tasks";
     static final int PERSISTENT_NOTIFICATION_ID = 2100;
     private static final long DOWNLOAD_POLL_MS = 800L;
@@ -418,6 +420,7 @@ public class MainActivity extends Activity {
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         String notificationThreadId = notificationThreadId(getIntent());
+        String notificationDevice = notificationDeviceUrl(getIntent());
         migrateTopInsetDefault();
         restoreMonitoredTasks();
         browserEngine = new AIMiniBrowserEngine(this);
@@ -489,22 +492,24 @@ public class MainActivity extends Activity {
             if (restoreWelcome || restoredUrl.isEmpty()) {
                 showWelcome();
             } else {
-                if (!notificationThreadId.isEmpty()) {
-                    loadUrl(urlWithThread(restoredUrl, notificationThreadId));
+                if (!notificationThreadId.isEmpty() || !notificationDevice.isEmpty()) {
+                    openNotificationThread(notificationThreadId, notificationDevice);
                 } else if (!browserStateRestored) {
                     loadUrl(restoredUrl);
                 }
             }
         } else {
             String lastUrl = preferences.getString(KEY_LAST_URL, "");
-            if (lastUrl.isEmpty()) {
+            if (lastUrl.isEmpty() && notificationDevice.isEmpty()) {
                 urlInput.setText("");
                 showWelcome();
             } else {
-                urlInput.setText(lastUrl);
-                loadUrl(notificationThreadId.isEmpty()
-                        ? lastUrl
-                        : urlWithThread(lastUrl, notificationThreadId));
+                urlInput.setText(notificationDevice.isEmpty() ? lastUrl : notificationDevice);
+                if (!notificationThreadId.isEmpty() || !notificationDevice.isEmpty()) {
+                    openNotificationThread(notificationThreadId, notificationDevice);
+                } else {
+                    loadUrl(lastUrl);
+                }
             }
         }
         scheduleAutomaticUpdateCheck();
@@ -515,7 +520,9 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         String threadId = notificationThreadId(intent);
-        if (!threadId.isEmpty()) openNotificationThread(threadId);
+        if (!threadId.isEmpty() || !notificationDeviceUrl(intent).isEmpty()) {
+            openNotificationThread(threadId, notificationDeviceUrl(intent));
+        }
         if (intent != null
                 && Intent.ACTION_MAIN.equals(intent.getAction())
                 && intent.hasCategory(Intent.CATEGORY_LAUNCHER)) {
@@ -529,10 +536,43 @@ public class MainActivity extends Activity {
         return threadId == null ? "" : threadId.trim();
     }
 
-    private void openNotificationThread(String threadId) {
-        String savedUrl = preferences == null ? "" : preferences.getString(KEY_LAST_URL, "");
-        if (savedUrl == null || savedUrl.trim().isEmpty()) return;
-        loadUrl(urlWithThread(savedUrl, threadId));
+    /** 通知归属的设备网址（点击通知时据此定位设备）。 */
+    private String currentDeviceUrlForNotification() {
+        if (preferences == null) return "";
+        String url = preferences.getString(KEY_CURRENT_DEVICE_URL, "");
+        if (url == null || url.trim().isEmpty()) {
+            url = preferences.getString(KEY_LAST_URL, "");
+        }
+        return url == null ? "" : url.trim();
+    }
+
+    /** 通知归属的设备类型（决定通知大图的流光配色）。 */
+    private String currentDeviceKindForNotification() {
+        if (preferences == null) return DEVICE_KIND_MINIAPP;
+        return normalizeDeviceKind(
+                preferences.getString(KEY_CURRENT_DEVICE_KIND, DEVICE_KIND_MINIAPP)
+        );
+    }
+
+    /** 通知携带的设备网址（空表示按当前设备处理）。 */
+    private String notificationDeviceUrl(Intent intent) {
+        if (intent == null) return "";
+        String deviceUrl = intent.getStringExtra(EXTRA_OPEN_DEVICE_URL);
+        return deviceUrl == null ? "" : deviceUrl.trim();
+    }
+
+    /**
+     * 打开通知对应的会话。多设备下先切到通知所属设备，再带上会话参数加载，
+     * 避免"在 A 设备上点了 B 设备的通知，结果 A 设备被重新加载"。
+     */
+    private void openNotificationThread(String threadId, String deviceUrl) {
+        String targetUrl = deviceUrl == null ? "" : deviceUrl.trim();
+        if (targetUrl.isEmpty()) {
+            targetUrl = preferences == null ? "" : preferences.getString(KEY_LAST_URL, "");
+        }
+        if (targetUrl == null || targetUrl.trim().isEmpty()) return;
+        String thread = threadId == null ? "" : threadId.trim();
+        loadUrl(thread.isEmpty() ? targetUrl : urlWithThread(targetUrl, thread));
     }
 
     private String urlWithThread(String rawUrl, String threadId) {
@@ -6103,7 +6143,9 @@ public class MainActivity extends Activity {
                     name,
                     error,
                     summary,
-                    durationMs
+                    durationMs,
+                    currentDeviceUrlForNotification(),
+                    currentDeviceKindForNotification()
             );
             manager.cancel(notificationId);
             manager.notify(notificationId, terminalNotification);

@@ -6,13 +6,20 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.graphics.Typeface;
 
 import org.json.JSONObject;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 final class TaskNotificationStyle {
@@ -27,7 +34,8 @@ final class TaskNotificationStyle {
             "task_terminal_notification_v1:";
     private static final long UNKNOWN_RUN_DEDUP_WINDOW_MS = 6L * 60L * 60L * 1000L;
     private static final long STARTED_AT_CLOCK_TOLERANCE_MS = 2000L;
-    private static Bitmap cachedLargeIcon;
+    /** 设备类型 → 通知大图缓存。 */
+    private static final Map<String, Bitmap> deviceBadgeCache = new HashMap<>();
 
     private TaskNotificationStyle() {
     }
@@ -40,7 +48,9 @@ final class TaskNotificationStyle {
             String threadName,
             boolean error,
             String rawSummary,
-            long durationMs
+            long durationMs,
+            String deviceUrl,
+            String deviceKind
     ) {
         String safeThreadName = cleanThreadName(context, threadName);
         String title = context.getString(
@@ -62,7 +72,12 @@ final class TaskNotificationStyle {
 
         Intent launchIntent = new Intent(context, MainActivity.class)
                 .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                .putExtra(MainActivity.EXTRA_OPEN_THREAD_ID, safeThreadId(threadId));
+                .putExtra(MainActivity.EXTRA_OPEN_THREAD_ID, safeThreadId(threadId))
+                // 多设备场景：点通知必须回到"这条通知所属的那台设备"，而不是当前设备。
+                .putExtra(
+                        MainActivity.EXTRA_OPEN_DEVICE_URL,
+                        deviceUrl == null ? "" : deviceUrl.trim()
+                );
         PendingIntent launchPendingIntent = PendingIntent.getActivity(
                 context,
                 notificationId,
@@ -85,7 +100,7 @@ final class TaskNotificationStyle {
                 .setBigContentTitle(title)
                 .bigText(body);
         builder.setSmallIcon(R.drawable.ic_notification)
-                .setLargeIcon(largeIcon(context))
+                .setLargeIcon(deviceBadgeIcon(context, deviceKind))
                 .setContentTitle(title)
                 .setContentText(summary)
                 .setStyle(bigTextStyle)
@@ -354,13 +369,42 @@ final class TaskNotificationStyle {
         }
     }
 
-    private static synchronized Bitmap largeIcon(Context context) {
-        if (cachedLargeIcon != null) return cachedLargeIcon;
-        Bitmap source = BitmapFactory.decodeResource(context.getResources(), R.drawable.ic_launcher);
-        if (source == null) return null;
-        int size = Math.max(48, Math.round(56f * context.getResources().getDisplayMetrics().density));
-        cachedLargeIcon = Bitmap.createScaledBitmap(source, size, size, true);
-        if (cachedLargeIcon != source) source.recycle();
-        return cachedLargeIcon;
+    /**
+     * 按设备类型生成的通知大图（类型流光底 + 缩写），相当于「好友头像」，
+     * 让多设备下的完成通知一眼看出是哪台设备发来的。
+     */
+    private static synchronized Bitmap deviceBadgeIcon(Context context, String deviceKind) {
+        String kind = deviceKind == null ? "" : deviceKind.trim();
+        Bitmap cached = deviceBadgeCache.get(kind);
+        if (cached != null) return cached;
+        int size = Math.max(
+                64,
+                Math.round(56f * context.getResources().getDisplayMetrics().density)
+        );
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        int[] gradient = MainActivity.deviceKindGradient(kind);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        paint.setShader(new LinearGradient(
+                0f,
+                0f,
+                size,
+                size,
+                gradient[0],
+                gradient[2],
+                Shader.TileMode.CLAMP
+        ));
+        float radius = size * 0.3f;
+        canvas.drawRoundRect(new RectF(0f, 0f, size, size), radius, radius, paint);
+        paint.setShader(null);
+        paint.setColor(Color.rgb(12, 20, 34));
+        paint.setTypeface(Typeface.DEFAULT_BOLD);
+        paint.setTextAlign(Paint.Align.CENTER);
+        paint.setTextSize(size * 0.32f);
+        Paint.FontMetrics metrics = paint.getFontMetrics();
+        float baseline = size / 2f - (metrics.ascent + metrics.descent) / 2f;
+        canvas.drawText(MainActivity.deviceKindBadge(kind), size / 2f, baseline, paint);
+        deviceBadgeCache.put(kind, bitmap);
+        return bitmap;
     }
 }
