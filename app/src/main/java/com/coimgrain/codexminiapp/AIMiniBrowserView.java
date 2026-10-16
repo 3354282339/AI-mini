@@ -51,6 +51,21 @@ final class AIMiniBrowserView extends FrameLayout {
                 boolean hasUserGesture,
                 int target
         ) {
+            return onLoadRequest(view, uri, hasUserGesture, target, false);
+        }
+
+        /**
+         * @param isRedirect true 表示这是服务器 30x 重定向触发的导航。
+         *                   重定向地址由服务端给出，调用方不应改写它（例如补 token），
+         *                   否则会把别的设备/页面的 token 拼到重定向地址上导致认证失败。
+         */
+        default boolean onLoadRequest(
+                AIMiniBrowserView view,
+                String uri,
+                boolean hasUserGesture,
+                int target,
+                boolean isRedirect
+        ) {
             return false;
         }
 
@@ -560,7 +575,8 @@ final class AIMiniBrowserView extends FrameLayout {
                         AIMiniBrowserView.this,
                         uri,
                         request.hasGesture(),
-                        0
+                        0,
+                        request.isRedirect()
                 );
                 return handled;
             }

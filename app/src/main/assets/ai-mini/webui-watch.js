@@ -250,34 +250,76 @@
     };
   }
 
+  /**
+   * 观察 WebSocket 收到的帧 —— 用原型方法包装，**不替换 window.WebSocket 构造函数**。
+   * 替换构造函数的写法虽然常见，但会改变 WebSocket 的身份（name/length/instanceof
+   * 边界），有产品会因此初始化异常；包装 addEventListener 与 onmessage 赋值则完全
+   * 不影响 socket 的创建与行为。
+   */
   function installWebSocketHook() {
-    if (!window.WebSocket) return;
-    var Original = window.WebSocket;
-    function Wrapped(url, protocols) {
-      var socket = protocols === undefined ? new Original(url) : new Original(url, protocols);
-      try {
-        socket.addEventListener("message", function (event) {
-          var now = Date.now();
-          // 产品专用帧优先：dsh 用 {type:'emit',event:'api-session/status',args:[id,running]}
-          // 精确表达"该会话是否在跑"，比任何启发式都准。
-          if (handleProductFrame(event.data)) return;
-          wsBurst = now - wsLastAt < WS_WINDOW_MS ? wsBurst + 1 : 1;
-          wsLastAt = now;
-          if (wsBurst >= WS_BURST) {
-            lastActivityAt = now;
-            startTicker();
+    if (!window.WebSocket || !window.WebSocket.prototype) return;
+    var proto = window.WebSocket.prototype;
+
+    try {
+      var originalAdd = proto.addEventListener;
+      if (typeof originalAdd === "function") {
+        proto.addEventListener = function (type, listener, options) {
+          if (type === "message" && typeof listener === "function") {
+            var wrapped = function (event) {
+              try {
+                observeFrame(event && event.data);
+              } catch (error) {
+              }
+              return listener.apply(this, arguments);
+            };
+            return originalAdd.call(this, "message", wrapped, options);
+          }
+          return originalAdd.apply(this, arguments);
+        };
+      }
+    } catch (error) {
+    }
+
+    try {
+      var descriptor = Object.getOwnPropertyDescriptor(proto, "onmessage");
+      if (descriptor && typeof descriptor.set === "function") {
+        Object.defineProperty(proto, "onmessage", {
+          configurable: true,
+          enumerable: descriptor.enumerable,
+          get: descriptor.get,
+          set: function (listener) {
+            if (typeof listener !== "function") {
+              descriptor.set.call(this, listener);
+              return;
+            }
+            var wrapped = function (event) {
+              try {
+                observeFrame(event && event.data);
+              } catch (error) {
+              }
+              return listener.apply(this, arguments);
+            };
+            descriptor.set.call(this, wrapped);
           }
         });
-      } catch (error) {
       }
-      return socket;
+    } catch (error) {
     }
-    Wrapped.prototype = Original.prototype;
-    Wrapped.CONNECTING = Original.CONNECTING;
-    Wrapped.OPEN = Original.OPEN;
-    Wrapped.CLOSING = Original.CLOSING;
-    Wrapped.CLOSED = Original.CLOSED;
-    window.WebSocket = Wrapped;
+  }
+
+  /**
+   * 观察一帧 WebSocket 数据：先看是不是产品精确事件（如 dsh 的 api-session/status），
+   * 不是的话按"消息突发"计入任务活动。
+   */
+  function observeFrame(data) {
+    if (handleProductFrame(data)) return;
+    var now = Date.now();
+    wsBurst = now - wsLastAt < WS_WINDOW_MS ? wsBurst + 1 : 1;
+    wsLastAt = now;
+    if (wsBurst >= WS_BURST) {
+      lastActivityAt = now;
+      startTicker();
+    }
   }
 
   /**
@@ -359,9 +401,9 @@
   }
 
   /**
-   * 基础移动端修补：未适配的 WebUI（zcode / dsh 等）在手机宽度下常见两类问题 ——
-   * 横向溢出（元素超出视口导致整页可左右拖动）和文本自动放大。
-   * 只做这两条最保守的修正，不动字体大小与布局结构，避免破坏产品自身样式。
+   * 基础移动端修补：未适配的 WebUI（zcode / dsh 等）在手机宽度下常见几类问题 ——
+   * 横向溢出（元素超出视口导致整页可左右拖动）、文本自动放大、以及出现可见滚动条
+   * 把内容（例如输入框）挤偏。只做这几条最保守的修正，不动字体大小与布局结构。
    */
   function installMobileCss() {
     try {
@@ -370,16 +412,22 @@
       style.id = "ai-mini-mobile-fix";
       style.textContent =
         "html,body{max-width:100%;overflow-x:hidden;}"
-        + "body{-webkit-text-size-adjust:100%;text-size-adjust:100%;}";
+        + "body{-webkit-text-size-adjust:100%;text-size-adjust:100%;}"
+        // 隐藏滚动条但保留滚动能力：移动端不需要常驻滚动条，
+        // 它出现/消失时会让输入框左右抖动（zcode 会话页就是这样）。
+        + "::-webkit-scrollbar{width:0!important;height:0!important;background:transparent!important;}"
+        + "html{scrollbar-width:none!important;-ms-overflow-style:none!important;}";
       (document.head || document.documentElement).appendChild(style);
     } catch (error) {
     }
   }
 
   installViewportMeta();
-  installMobileCss();
 
   if (MANAGED_BY_PAGE_JS) return;
+
+  // 移动端修补只作用于未适配的产品；GPT 页面由 page.js 自行处理。
+  installMobileCss();
 
   installFetchHook();
   installXhrHook();

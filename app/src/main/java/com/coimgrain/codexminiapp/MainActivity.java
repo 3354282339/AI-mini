@@ -3899,6 +3899,18 @@ public class MainActivity extends Activity {
     private boolean isSameMainDocument(String candidateUrl) {
         String candidate = canonicalNavigationUrl(candidateUrl);
         if (candidate.isEmpty()) return true;
+        // 同源即算同一主文档：多设备场景下每台设备的站点都是"主文档"，
+        // 它内部的路由跳转（只有路径/查询变化）不该被当作外部链接丢进浏览器容器。
+        // 之前用"URL 完全相等"判断，dsh / zcode 这类 SPA 内部跳一次就会踩到。
+        String candidateOrigin = originOf(Uri.parse(candidateUrl == null ? "" : candidateUrl));
+        if (!candidateOrigin.isEmpty()) {
+            String currentOrigin = originOf(Uri.parse(webView == null ? "" : webView.getUrl()));
+            if (candidateOrigin.equals(currentOrigin)) return true;
+            String savedOrigin = originOf(Uri.parse(
+                    preferences == null ? "" : preferences.getString(KEY_LAST_URL, "")
+            ));
+            if (candidateOrigin.equals(savedOrigin)) return true;
+        }
         String current = canonicalNavigationUrl(webView == null ? "" : webView.getUrl());
         if (!current.isEmpty() && candidate.equals(current)) return true;
         String saved = canonicalNavigationUrl(preferences.getString(KEY_LAST_URL, ""));
@@ -3940,11 +3952,20 @@ public class MainActivity extends Activity {
             String candidateToken = encodedQueryParameter(candidate, "token");
             if (candidateToken != null && !candidateToken.isEmpty()) return rawCandidate;
 
+            // 只在同源地址之间继承 token。切换设备时 webView.getUrl() 仍然是上一个
+            // 设备的页面，跨源继承会把上一个设备的 token 带到新设备上（新设备因此
+            // 401）。优先用 last_url —— loadUrl 时刚写入的目标设备地址，最可信。
+            String candidateOrigin = originOf(candidate);
             String currentUrl = webView == null ? "" : webView.getUrl();
             String savedUrl = preferences == null ? "" : preferences.getString(KEY_LAST_URL, "");
-            String inheritedToken = encodedQueryParameter(Uri.parse(currentUrl), "token");
-            if (inheritedToken == null || inheritedToken.isEmpty()) {
+
+            String inheritedToken = null;
+            if (sameOrigin(candidateOrigin, savedUrl)) {
                 inheritedToken = encodedQueryParameter(Uri.parse(savedUrl), "token");
+            }
+            if ((inheritedToken == null || inheritedToken.isEmpty())
+                    && sameOrigin(candidateOrigin, currentUrl)) {
+                inheritedToken = encodedQueryParameter(Uri.parse(currentUrl), "token");
             }
             if (inheritedToken == null || inheritedToken.isEmpty()) return rawCandidate;
 
@@ -3957,6 +3978,26 @@ public class MainActivity extends Activity {
             return builder.build().toString();
         } catch (Exception ignored) {
             return rawCandidate;
+        }
+    }
+
+    /** scheme://authority，用于同源判断（忽略路径与查询）。 */
+    private String originOf(Uri uri) {
+        if (uri == null) return "";
+        String scheme = uri.getScheme();
+        String authority = uri.getEncodedAuthority();
+        if (scheme == null || authority == null) return "";
+        return scheme.toLowerCase(Locale.ROOT) + "://" + authority.toLowerCase(Locale.ROOT);
+    }
+
+    private boolean sameOrigin(String origin, String url) {
+        if (origin == null || origin.isEmpty() || url == null || url.trim().isEmpty()) {
+            return false;
+        }
+        try {
+            return origin.equals(originOf(Uri.parse(url.trim())));
+        } catch (Exception ignored) {
+            return false;
         }
     }
 
@@ -9640,7 +9681,29 @@ public class MainActivity extends Activity {
                     boolean hasUserGesture,
                     int target
             ) {
+                return onLoadRequest(view, rawUri, hasUserGesture, target, false);
+            }
+
+            @Override
+            public boolean onLoadRequest(
+                    AIMiniBrowserView view,
+                    String rawUri,
+                    boolean hasUserGesture,
+                    int target,
+                    boolean isRedirect
+            ) {
                 String candidate = rawUri == null ? "" : rawUri;
+                // 服务器 30x 重定向的目标地址由服务端决定，原样放行。
+                // 之前这里也走 token 修复：切换设备时 webView.getUrl() 还是上一个
+                // 设备的页面，于是把上一个设备的 token 拼到了新设备的重定向地址上，
+                // 新设备（如 dsh）因此认证失败，表现为卡在认证页 / 反复闪。
+                if (isRedirect) {
+                    Log.d(
+                            NAVIGATION_LOG_TAG,
+                            "redirect passthrough url=" + navigationUrlForLog(candidate)
+                    );
+                    return false;
+                }
                 Uri uri = Uri.parse(candidate);
                 String scheme = uri.getScheme();
                 // 协议相对地址先归一成 https，避免掉进系统浏览器。
