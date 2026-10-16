@@ -58,6 +58,9 @@
   var wsBurst = 0;
   var wsLastAt = 0;
   var ticker = null;
+  /** 收到过产品精确帧后，停用 DOM/网络启发式，避免两套判据互相干扰。 */
+  var productFramesSeen = false;
+  var deviceKind = String(window.__AIMiniDeviceKind || "miniapp");
 
   function post(message) {
     try {
@@ -134,6 +137,7 @@
   }
 
   function tick() {
+    if (productFramesSeen) return;
     var busy = domBusy();
     if (busy) {
       lastActivityAt = Date.now();
@@ -222,8 +226,11 @@
     function Wrapped(url, protocols) {
       var socket = protocols === undefined ? new Original(url) : new Original(url, protocols);
       try {
-        socket.addEventListener("message", function () {
+        socket.addEventListener("message", function (event) {
           var now = Date.now();
+          // 产品专用帧优先：dsh 用 {type:'emit',event:'api-session/status',args:[id,running]}
+          // 精确表达"该会话是否在跑"，比任何启发式都准。
+          if (handleProductFrame(event.data)) return;
           wsBurst = now - wsLastAt < WS_WINDOW_MS ? wsBurst + 1 : 1;
           wsLastAt = now;
           if (wsBurst >= WS_BURST) {
@@ -241,6 +248,71 @@
     Wrapped.CLOSING = Original.CLOSING;
     Wrapped.CLOSED = Original.CLOSED;
     window.WebSocket = Wrapped;
+  }
+
+  /**
+   * dsh（DeepSeek Hermes）专用：网关把 Cordis 事件原样推给客户端，
+   * 事件 `api-session/status` 的第二个参数就是"该会话是否正在运行"
+   * （见 packages/client/ui-session/src/client/index.ts 的 $on('api-session/status', ...)）。
+   * `api-session/activity` 则用来维持活动时间戳。
+   */
+  function handleProductFrame(data) {
+    // 服务端可能以文本或 ArrayBuffer 下发；Blob 需要异步读取，这里不做（dsh 走文本）。
+    if (typeof data !== "string") {
+      if (data instanceof ArrayBuffer) {
+        try {
+          data = new TextDecoder("utf-8").decode(new Uint8Array(data));
+        } catch (error) {
+          return false;
+        }
+      } else {
+        return false;
+      }
+    }
+    var text = data.trim();
+    if (text.length === 0 || text.charAt(0) !== "{") return false;
+    var frame;
+    try {
+      frame = JSON.parse(text);
+    } catch (error) {
+      return false;
+    }
+    if (!frame || frame.type !== "emit") return false;
+    var event = String(frame.event || "");
+    var args = frame.args || [];
+    if (event === "api-session/status") {
+      productFramesSeen = true;
+      var isRunning = args.length > 1 ? !!args[1] : false;
+      if (isRunning) {
+        markRunning();
+      } else {
+        markComplete();
+      }
+      return true;
+    }
+    if (event === "api-session/activity") {
+      lastActivityAt = Date.now();
+      if (running) startTicker();
+      return true;
+    }
+    return false;
+  }
+
+  function markRunning() {
+    lastActivityAt = Date.now();
+    if (!running) {
+      running = true;
+      runStartedAt = Date.now();
+      emit("running");
+    }
+    startTicker();
+  }
+
+  function markComplete() {
+    if (!running) return;
+    running = false;
+    lastActivityAt = Date.now();
+    emit("complete");
   }
 
   function installViewportMeta() {
@@ -285,7 +357,9 @@
   startTicker();
   window.__AIMiniWebUiWatchProbe = function () {
     return {
+      deviceKind: deviceKind,
       running: running,
+      precise: productFramesSeen,
       domBusy: domBusy(),
       active: activeRequests,
       idleMs: Date.now() - lastActivityAt

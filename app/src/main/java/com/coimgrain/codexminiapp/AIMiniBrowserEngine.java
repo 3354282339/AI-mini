@@ -36,6 +36,8 @@ final class AIMiniBrowserEngine {
     private String pageScript = "";
     private String bridgeScript = "";
     private String watchScript = "";
+    /** 当前页面所属设备类型，注入到页面供适配脚本选择对应策略。 */
+    private String deviceKind = "miniapp";
     private boolean ready;
 
     AIMiniBrowserEngine(Context context) {
@@ -81,10 +83,16 @@ final class AIMiniBrowserEngine {
         if (view != null) bridgeReady.put(view, true);
     }
 
+    void setDeviceKind(String kind) {
+        deviceKind = kind == null || kind.trim().isEmpty() ? "miniapp" : kind.trim();
+    }
+
     String documentStartScript() {
-        // 顺序：本地 WebUI 逻辑（page.js）+ 通用任务监视（zcode/dsh/其它）+ 原生桥。
-        // webui-watch.js 会自行判断当前页面是否已由 page.js 接管，避免重复上报。
-        return pageScript + "\n" + watchScript + "\n" + bridgeScript;
+        // 顺序：设备类型标记 + 本地 WebUI 逻辑（page.js）+ 通用任务监视 + 原生桥。
+        // webui-watch.js 依据 __AIMiniDeviceKind 选择产品专用适配（如 dsh 的 WS 事件），
+        // 并在 page.js 已接管的页面上只做修补、不重复探测。
+        return "window.__AIMiniDeviceKind=" + JSONObject.quote(deviceKind) + ";\n"
+                + pageScript + "\n" + watchScript + "\n" + bridgeScript;
     }
 
     String fontFaceCss() {

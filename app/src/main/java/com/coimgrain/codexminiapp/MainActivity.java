@@ -5236,6 +5236,8 @@ public class MainActivity extends Activity {
         if (preferences == null || url == null || url.trim().isEmpty()) return;
         String kind = currentDeviceKindForUrl(url);
         selectedDeviceKind = kind;
+        // 让注入脚本知道当前是哪个产品，从而启用对应的状态适配策略。
+        if (browserEngine != null) browserEngine.setDeviceKind(kind);
         preferences.edit()
                 .putString(KEY_CURRENT_DEVICE_URL, url)
                 .putString(KEY_CURRENT_DEVICE_KIND, kind)
