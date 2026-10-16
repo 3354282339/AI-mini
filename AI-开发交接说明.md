@@ -475,8 +475,42 @@ zcode 的协议要在注入脚本里复刻编解码不划算，所以维持兜�
 
 **悬浮窗切换列表只做切换**：`deviceRow(..., withActions=false)` 不显示 ⋯、不挂长按菜单；重命名 / 改类型 / 删除统一在首页的设备卡片上做（⋯ 或长按）。
 
-### 7.6 真机调试入口
+### 7.6 设备认证与 cookie（以 dsh 为例）
 
+dsh 的 WebUI 首次访问会 **303 See Other** 到 `./`，同时下发认证 cookie（实测自 `http://223.113.43.55:7788/?token=…`）：
+
+```
+set-cookie: dsh-auth-<随机串>=v1.<payload>.<sig>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict
+```
+
+（30 天有效期、HttpOnly、SameSite=Strict）
+
+| 请求 | 结果 |
+| --- | --- |
+| 带 token 访问 `/?token=…` | 303 → 下发 cookie → 跟随重定向后 200，正常显示界面 |
+| 带 cookie 访问 `/` | 200，正常显示界面 |
+| 不带 cookie 访问 `/` | 401 `dsh web authentication required; reopen the URL printed by dsh web.` |
+
+所以 App 侧必须做到两件事，否则表现为"卡在认证页"：
+
+| 措施 | 实现 |
+| --- | --- |
+| cookie 落盘 | `flushWebCookies()` 在 `onPageFinished` 与 `onPause` 调用 `CookieManager.flush()` —— Android 的 cookie 默认只在内存，不 flush 时进程被系统回收就丢 |
+| 接受持久/第三方 cookie | `AIMiniBrowserView` 初始化：`setAcceptCookie(true)` + `setAcceptThirdPartyCookies(webView, true)` |
+| 入口地址保留 token | `inheritMainNavigationToken()` 让页面内跳转不丢 token；`restoreAuthParamsIfNeeded()` 在入口地址缺 token 时，用同一主机上保存过的带 token 地址补回 |
+
+### 7.7 发版流程（版本号每次 +1）
+
+1. 改 `app/build.gradle`：`versionName` +1（`1.0.1` → `1.0.2`）、`versionCode` +1、`archivesBaseName` 同步
+2. `.\build-apk.ps1 -Project D:\aicoding\AImini\GPT-Mini-Android -Task assembleRelease`
+3. 推送：`git push aimini main`（机场节点全挂时用 `git -c http.proxy= -c https.proxy= push aimini main` 直连，实测可用）
+4. 发布：`gh release create v1.0.2 "app\build\outputs\apk\release\AI mini-1.0.2-release.apk" --repo 3354282339/AI-mini --title "AI mini 1.0.2" --notes-file notes.md`
+   - ⚠️ GitHub 会把上传文件名里的**空格换成点**（`AI mini-…` → `AI.mini-…`），上传后用 `gh api -X PATCH repos/3354282339/AI-mini/releases/assets/<id> -f name="AI-mini-1.0.2-release.apk"` 改回
+5. 校验：`gh release download` 拉回来比对 SHA256
+
+「检查更新」读取 `https://api.github.com/repos/3354282339/AI-mini/releases`，取最新 release 的 `.apk` 资产（优先名字含 `webview`，否则任意 `.apk`，排除 `gecko`），与当前 `versionName` 比较后提示；自动检查静默失败，手动打开更新页会显示错误。
+
+### 7.8 真机调试入口
 页面里注入了探针函数，可用 WebView 调试或在代码里 `evaluateJavascript` 读取：
 
 ```js
