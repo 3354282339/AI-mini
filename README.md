@@ -7,8 +7,8 @@
 当前版本：
 
 - 应用名：`AI mini`
-- versionName：`1.0.1`
-- versionCode：`2`
+- versionName：`1.0.2`
+- versionCode：`3`
 - 仓库：<https://github.com/3354282339/AI-mini>
 - 下载安装包：<https://github.com/3354282339/AI-mini/releases/latest>
 - applicationId：`app.aimini`（与旧版 `app.gptmini.webview`、Gecko 版 `app.gptmini` 互不冲突，可同时安装）
