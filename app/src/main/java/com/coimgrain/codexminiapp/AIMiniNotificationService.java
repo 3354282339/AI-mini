@@ -544,7 +544,19 @@ public final class AIMiniNotificationService extends Service {
     }
 
     private ConnectionInfo connectionInfo() {
-        String savedUrl = preferences.getString(MainActivity.KEY_LAST_URL, "");
+        // zcode / dsh / custom devices are plain WebUIs without the Codex status API, so
+        // the monitor keeps the foreground notice alive but does not poll them.
+        String kind = preferences.getString(
+                MainActivity.KEY_CURRENT_DEVICE_KIND,
+                MainActivity.DEVICE_KIND_MINIAPP
+        );
+        if (!MainActivity.DEVICE_KIND_MINIAPP.equals(MainActivity.normalizeDeviceKind(kind))) {
+            return null;
+        }
+        String savedUrl = preferences.getString(MainActivity.KEY_CURRENT_DEVICE_URL, "");
+        if (savedUrl == null || savedUrl.trim().isEmpty()) {
+            savedUrl = preferences.getString(MainActivity.KEY_LAST_URL, "");
+        }
         if (savedUrl == null || savedUrl.trim().isEmpty()) return null;
         try {
             Uri page = Uri.parse(savedUrl.trim());

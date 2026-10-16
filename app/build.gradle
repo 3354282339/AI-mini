@@ -14,9 +14,9 @@ android {
         applicationId 'app.aimini'
         minSdk 26
         targetSdk 35
-        versionCode 35
-        versionName '2.0.3'
-        setProperty('archivesBaseName', 'AI mini-2.0.3')
+        versionCode 1
+        versionName '1.0.0'
+        setProperty('archivesBaseName', 'AI mini-1.0.0')
     }
 
     signingConfigs {

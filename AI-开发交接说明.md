@@ -384,3 +384,41 @@ release 签名文件：
 ```
 
 如果新电脑没有 `.tools`，请改用新电脑 Android SDK 对应的 `apksigner` 和 `zipalign` 路径。
+
+## 6. 多设备（多连接类型）设计
+
+AI mini 从"只能连一种 WebUI"扩展为"多设备容器"：**一个网址 = 一台设备**，设备再带一个**类型**，类型决定标签、配色和产品专属行为。
+
+### 6.1 数据
+
+- 存储于同一个 `SharedPreferences`（`MainActivity.PREFS_NAME`，即 `ai_mini_prefs`）：
+  - `saved_connections`：JSON 数组，每项 `{url, name, kind, lastUsedAt}`。
+  - `current_device_url` / `current_device_kind`：当前 WebView 里显示的设备（`markCurrentDevice()` 写入）。
+  - `last_url`：保留，兼容旧逻辑与"继续上次"。
+- **向后兼容**：老记录没有 `kind` 字段，读取时用 `detectDeviceKind(url)` 推断，不会丢设备。
+- 类型常量：`DEVICE_KIND_MINIAPP` / `DEVICE_KIND_ZCODE` / `DEVICE_KIND_DSH` / `DEVICE_KIND_OTHER`，顺序见 `DEVICE_KINDS`。
+
+### 6.2 关键方法（都在 MainActivity）
+
+| 方法 | 作用 |
+| --- | --- |
+| `deviceKindLabel / deviceKindBadge / deviceKindAccent` | 类型的中文名、短标签（Web/ZC/DSH/URL）、强调色 |
+| `normalizeDeviceKind / detectDeviceKind` | 类型校验；按 URL 关键字推断（`zcode` → zcode，`dsh`/`deepseek` → dsh，`codex`/`mini` → miniapp） |
+| `readSavedConnections / writeSavedConnections / rememberDevice` | 设备读写；`rememberDevice(url, kind)` 显式改类型，`rememberDevice(url, null)` 不会覆盖用户手改的类型 |
+| `markCurrentDevice` | 记录当前设备并刷新首页列表与悬浮菜单副标题 |
+| `refreshWelcomeDevices / deviceRow` | 首页「我的设备」列表 |
+| `showSavedConnectionsDialog / createSavedConnectionRow / showConnectionKindPicker` | 设备管理对话框（切换、重命名、改类型、删除） |
+| `currentDeviceSummary` | 悬浮菜单「切换设备」的副标题 |
+
+### 6.3 接入一个新产品的步骤
+
+1. 加类型常量（`DEVICE_KIND_XXX`）并放进 `DEVICE_KINDS`；在 `deviceKindLabel/Badge/Accent` 里补分支。
+2. 在 `detectDeviceKind` 里加它的 URL 关键字（可选，用户也可手动选）。
+3. 按需加产品专属行为。当前唯一有专属行为的是 `miniapp`：`AIMiniNotificationService.connectionInfo()` 会检查 `current_device_kind`，非 `miniapp` 直接返回 `null`（不轮询 `/codex/status`，只保留常驻通知）。
+4. `strings.xml` 补 `device_kind_xxx` 文案。
+
+### 6.4 已知边界
+
+- zcode / dsh 目前**只做连接与切换**，没有任务状态通知、没有页面桥接（`page.js` 里的键盘/下载/任务钩子只对 miniapp WebUI 生效）。
+- `page.js` 依赖 UA 里的 `GPTMiniAndroidApp/` 标记判断"是否在 App 内"，改名时**故意没动**；若要为 zcode/dsh 注入各自的桥接脚本，需要按设备类型选择注入内容。
+

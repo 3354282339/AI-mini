@@ -49,6 +49,7 @@ import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.util.Base64;
 import android.util.Log;
 import android.view.Gravity;
@@ -126,6 +127,30 @@ public class MainActivity extends Activity {
     static final String KEY_LAST_URL = "last_url";
     private static final String KEY_WELCOME_VISIBLE_STATE = "welcome_visible_state";
     private static final String KEY_SAVED_CONNECTIONS = "saved_connections";
+    /** URL of the device currently loaded in the WebView. */
+    static final String KEY_CURRENT_DEVICE_URL = "current_device_url";
+    /** Device family of the current connection; drives per-product behaviour. */
+    static final String KEY_CURRENT_DEVICE_KIND = "current_device_kind";
+
+    /**
+     * Device families AI mini can connect to. Every one of them works the same way at
+     * the transport level — open a URL and show the WebUI — so a “device” is just a
+     * named URL plus a family, and the family decides labels, colours, defaults and
+     * which product-specific hooks are enabled.
+     */
+    static final String DEVICE_KIND_MINIAPP = "miniapp";
+    static final String DEVICE_KIND_ZCODE = "zcode";
+    static final String DEVICE_KIND_DSH = "dsh";
+    static final String DEVICE_KIND_OTHER = "other";
+    /** Selection order shown in the device editors. */
+    static final String[] DEVICE_KINDS = {
+            DEVICE_KIND_MINIAPP,
+            DEVICE_KIND_ZCODE,
+            DEVICE_KIND_DSH,
+            DEVICE_KIND_OTHER
+    };
+    /** How many devices the welcome screen lists before offering “view all”. */
+    private static final int WELCOME_DEVICE_LIMIT = 4;
     private static final String KEY_DOWNLOAD_RECORDS = "download_records";
     private static final String KEY_FLOAT_SIZE = "float_size";
     private static final String KEY_FLOAT_ALPHA = "float_alpha";
@@ -242,7 +267,12 @@ public class MainActivity extends Activity {
     private LinearLayout continueButton;
     private TextView continueTitle;
     private TextView continueSubtitle;
-    private TextView savedConnectionsSubtitle;
+    /** Device list rendered on the welcome screen. */
+    private LinearLayout deviceList;
+    private TextView deviceSummary;
+    /** Family picked in the add-device form when the URL does not match a saved device. */
+    private String selectedDeviceKind = DEVICE_KIND_MINIAPP;
+    private TextView deviceKindPicker;
     private String pendingConnectionUrl;
     private boolean waitingForMainPageReveal;
     private ImageView mainNavigationCover;
@@ -271,6 +301,8 @@ public class MainActivity extends Activity {
     private TextView miniMenuBackButton;
     private TextView miniMenuTitleText;
     private LinearLayout miniMenuRootPage;
+    /** Subtitle of the floating menu's device row, refreshed on every device switch. */
+    private TextView miniMenuDeviceSubtitle;
     private LinearLayout floatSettingsPanel;
     private LinearLayout notificationSettingsPanel;
     private LinearLayout notificationHelpPanel;
@@ -618,7 +650,7 @@ public class MainActivity extends Activity {
         ));
 
         TextView gptTitle = new TextView(this);
-        gptTitle.setText("GPT");
+        gptTitle.setText("AI");
         gptTitle.setTextSize(36);
         gptTitle.setTextColor(Color.rgb(248, 250, 255));
         gptTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -630,7 +662,7 @@ public class MainActivity extends Activity {
         ));
 
         TextView miniTitle = new TextView(this);
-        miniTitle.setText(" Mini");
+        miniTitle.setText(" mini");
         miniTitle.setTextSize(36);
         miniTitle.setTextColor(Color.rgb(55, 189, 226));
         miniTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD_ITALIC);
@@ -715,6 +747,84 @@ public class MainActivity extends Activity {
             if (!lastUrl.isEmpty()) loadUrl(lastUrl);
         });
         actions.addView(continueButton, connectionActionParams(true));
+
+        // Device list: every saved connection is one device, grouped by family. Future
+        // products (zcode, dsh, …) get their own badge here without further UI work.
+        LinearLayout devices = new LinearLayout(this);
+        devices.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams devicesParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        devicesParams.setMargins(0, dp(16), 0, 0);
+        card.addView(devices, devicesParams);
+
+        LinearLayout deviceHeader = new LinearLayout(this);
+        deviceHeader.setOrientation(LinearLayout.HORIZONTAL);
+        deviceHeader.setGravity(Gravity.CENTER_VERTICAL);
+        devices.addView(deviceHeader, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
+        TextView deviceTitle = new TextView(this);
+        deviceTitle.setText(R.string.my_devices);
+        deviceTitle.setTextSize(17);
+        deviceTitle.setTextColor(Color.rgb(210, 219, 236));
+        deviceTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        deviceHeader.addView(deviceTitle, new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        ));
+
+        deviceSummary = new TextView(this);
+        deviceSummary.setTextSize(12);
+        deviceSummary.setTextColor(Color.rgb(150, 163, 191));
+        deviceHeader.addView(deviceSummary);
+
+        deviceList = new LinearLayout(this);
+        deviceList.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams deviceListParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        deviceListParams.setMargins(0, dp(10), 0, 0);
+        devices.addView(deviceList, deviceListParams);
+        refreshWelcomeDevices();
+
+        LinearLayout kindRow = new LinearLayout(this);
+        kindRow.setOrientation(LinearLayout.HORIZONTAL);
+        kindRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams kindRowParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        kindRowParams.setMargins(0, dp(16), 0, 0);
+        card.addView(kindRow, kindRowParams);
+
+        TextView kindLabel = new TextView(this);
+        kindLabel.setText(R.string.device_kind_pick);
+        kindLabel.setTextSize(15);
+        kindLabel.setTextColor(Color.rgb(210, 219, 236));
+        kindLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        kindRow.addView(kindLabel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
+        deviceKindPicker = new TextView(this);
+        deviceKindPicker.setTextSize(13);
+        deviceKindPicker.setGravity(Gravity.CENTER);
+        deviceKindPicker.setPadding(dp(12), dp(7), dp(12), dp(7));
+        deviceKindPicker.setOnClickListener(view -> showDeviceKindPicker());
+        LinearLayout.LayoutParams pickerParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        pickerParams.setMargins(dp(10), 0, 0, 0);
+        kindRow.addView(deviceKindPicker, pickerParams);
+        updateDeviceKindPickerLabel();
 
         TextView manualLabel = new TextView(this);
         manualLabel.setText(R.string.manual_input);
@@ -1156,6 +1266,19 @@ public class MainActivity extends Activity {
                 },
                 null
         ), miniActionParams(dp(6)));
+        View deviceNavRow = createMiniNavRow(
+                getString(R.string.device_switch),
+                currentDeviceSummary(),
+                "device",
+                true,
+                view -> {
+                    hideMiniMenu();
+                    showSavedConnectionsDialog();
+                }
+        );
+        miniMenuDeviceSubtitle =
+                (TextView) deviceNavRow.getTag(R.id.saved_connection_subtitle);
+        miniMenuRootPage.addView(deviceNavRow);
         miniMenuRootPage.addView(createMiniNavRow(
                 getString(R.string.interface_settings),
                 getString(R.string.mini_menu_interface_subtitle),
@@ -1888,6 +2011,7 @@ public class MainActivity extends Activity {
         else if ("notification".equals(kind)) glyph = "◔";
         else if ("notification-help".equals(kind)) glyph = "?";
         else if ("update".equals(kind)) glyph = "⟳";
+        else if ("device".equals(kind)) glyph = "⇄";
         icon.setText(glyph);
         icon.setTag(kind);
         return icon;
@@ -4107,6 +4231,7 @@ public class MainActivity extends Activity {
         welcomeView.setVisibility(View.VISIBLE);
         String lastUrl = preferences.getString(KEY_LAST_URL, "");
         configureContinueButton(lastUrl);
+        refreshWelcomeDevices();
         welcomeUrlInput.setText("");
         welcomeUrlInput.clearFocus();
         hideSoftKeyboard(welcomeUrlInput);
@@ -4299,12 +4424,282 @@ public class MainActivity extends Activity {
         return icon;
     }
 
+    /** Chinese label for a device family, shown in device lists and editors. */
+    static String deviceKindLabel(Context context, String kind) {
+        if (context == null) return "";
+        if (DEVICE_KIND_ZCODE.equals(kind)) return context.getString(R.string.device_kind_zcode);
+        if (DEVICE_KIND_DSH.equals(kind)) return context.getString(R.string.device_kind_dsh);
+        if (DEVICE_KIND_OTHER.equals(kind)) return context.getString(R.string.device_kind_other);
+        return context.getString(R.string.device_kind_miniapp);
+    }
+
+    /** Short badge text for a device row: Web / ZC / DSH / URL. */
+    static String deviceKindBadge(String kind) {
+        if (DEVICE_KIND_ZCODE.equals(kind)) return "ZC";
+        if (DEVICE_KIND_DSH.equals(kind)) return "DSH";
+        if (DEVICE_KIND_OTHER.equals(kind)) return "URL";
+        return "Web";
+    }
+
+    /** Accent colour per family so devices are distinguishable at a glance. */
+    static int deviceKindAccent(String kind) {
+        if (DEVICE_KIND_ZCODE.equals(kind)) return Color.rgb(126, 171, 255);
+        if (DEVICE_KIND_DSH.equals(kind)) return Color.rgb(126, 231, 190);
+        if (DEVICE_KIND_OTHER.equals(kind)) return Color.rgb(196, 168, 255);
+        return Color.rgb(106, 137, 255);
+    }
+
+    static String normalizeDeviceKind(String kind) {
+        String value = kind == null ? "" : kind.trim().toLowerCase(Locale.ROOT);
+        for (String candidate : DEVICE_KINDS) {
+            if (candidate.equals(value)) return candidate;
+        }
+        return DEVICE_KIND_MINIAPP;
+    }
+
+    /**
+     * Best-effort family detection from the URL, used for saved connections created
+     * before families existed and as the default in the add-device form. The user can
+     * always override it.
+     */
+    static String detectDeviceKind(String rawUrl) {
+        String url = rawUrl == null ? "" : rawUrl.toLowerCase(Locale.ROOT);
+        if (url.contains("zcode")) return DEVICE_KIND_ZCODE;
+        if (url.contains("dsh") || url.contains("deepseek")) return DEVICE_KIND_DSH;
+        if (url.contains("codex") || url.contains("mini")) return DEVICE_KIND_MINIAPP;
+        return DEVICE_KIND_MINIAPP;
+    }
+
+    /**
+     * Rebuilds the welcome-screen device list. The list is the primary entry point once
+     * more than one product is connected (local WebUI, zcode, dsh, …).
+     */
+    private void refreshWelcomeDevices() {
+        if (deviceList == null) return;
+        deviceList.removeAllViews();
+        List<SavedConnection> connections = preferences == null
+                ? new ArrayList<>()
+                : readSavedConnections();
+        if (deviceSummary != null) {
+            deviceSummary.setText(connections.isEmpty()
+                    ? ""
+                    : getString(R.string.my_devices_count, connections.size()));
+        }
+        if (connections.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText(R.string.my_devices_empty);
+            empty.setTextSize(12);
+            empty.setTextColor(Color.rgb(150, 163, 191));
+            empty.setLineSpacing(dp(3), 1f);
+            deviceList.addView(empty);
+            return;
+        }
+        String currentUrl = preferences.getString(KEY_CURRENT_DEVICE_URL, "");
+        int shown = 0;
+        for (SavedConnection connection : connections) {
+            if (shown >= WELCOME_DEVICE_LIMIT) break;
+            deviceList.addView(deviceRow(
+                    connection,
+                    sameConnectionUrl(connection.url, currentUrl)
+            ));
+            shown += 1;
+        }
+        if (connections.size() > shown) {
+            deviceList.addView(deviceListLink(
+                    getString(R.string.my_devices_more, connections.size())
+            ));
+        }
+        deviceList.addView(deviceListLink(getString(R.string.my_devices_manage)));
+    }
+
+    private TextView deviceListLink(String text) {
+        TextView link = new TextView(this);
+        link.setText(text);
+        link.setTextSize(12);
+        link.setTextColor(Color.rgb(126, 171, 255));
+        link.setPadding(dp(2), dp(10), dp(2), 0);
+        link.setOnClickListener(view -> showSavedConnectionsDialog());
+        return link;
+    }
+
+    /** One device row: family badge, name, family + host, tap to connect. */
+    private View deviceRow(SavedConnection connection, boolean current) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(10), dp(10), dp(10), dp(10));
+        int accent = deviceKindAccent(connection.kind);
+        row.setBackground(strokedRect(
+                current ? Color.argb(210, 16, 40, 74) : Color.argb(170, 8, 20, 42),
+                current ? accent : Color.argb(90, 77, 111, 171),
+                dp(16),
+                dp(1)
+        ));
+
+        TextView badge = new TextView(this);
+        badge.setText(deviceKindBadge(connection.kind));
+        badge.setTextSize(11);
+        badge.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        badge.setTextColor(accent);
+        badge.setGravity(Gravity.CENTER);
+        badge.setBackground(strokedRect(
+                Color.argb(60, Color.red(accent), Color.green(accent), Color.blue(accent)),
+                accent,
+                dp(9),
+                dp(1)
+        ));
+        row.addView(badge, new LinearLayout.LayoutParams(dp(48), dp(30)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
+        copyParams.setMargins(dp(10), 0, 0, 0);
+        row.addView(copy, copyParams);
+
+        TextView name = new TextView(this);
+        name.setText(connection.displayName(this));
+        name.setTextSize(14);
+        name.setTextColor(Color.rgb(238, 243, 255));
+        name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(name);
+
+        TextView meta = new TextView(this);
+        meta.setText(deviceKindLabel(this, connection.kind) + " · " + shortHost(connection.url));
+        meta.setTextSize(11);
+        meta.setTextColor(Color.rgb(150, 163, 191));
+        meta.setSingleLine(true);
+        meta.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(meta);
+
+        row.setOnClickListener(view -> connectToDevice(connection));
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        rowParams.setMargins(0, dp(6), 0, 0);
+        row.setLayoutParams(rowParams);
+        return row;
+    }
+
+    /** Connects to a saved device and keeps its family as the “add device” default. */
+    private void connectToDevice(SavedConnection connection) {
+        if (connection == null) return;
+        selectedDeviceKind = normalizeDeviceKind(connection.kind);
+        updateDeviceKindPickerLabel();
+        loadUrl(connection.url);
+    }
+
+    private String shortHost(String url) {
+        try {
+            Uri uri = Uri.parse(url);
+            String host = uri.getHost();
+            if (host != null && !host.isEmpty()) {
+                int port = uri.getPort();
+                return port > 0 ? host + ":" + port : host;
+            }
+        } catch (Exception ignored) {
+        }
+        return url == null ? "" : url;
+    }
+
+    private void showDeviceKindPicker() {
+        String[] labels = new String[DEVICE_KINDS.length];
+        int checked = 0;
+        for (int index = 0; index < DEVICE_KINDS.length; index++) {
+            labels[index] = deviceKindLabel(this, DEVICE_KINDS[index]);
+            if (DEVICE_KINDS[index].equals(normalizeDeviceKind(selectedDeviceKind))) {
+                checked = index;
+            }
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.device_kind_pick)
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    selectedDeviceKind = DEVICE_KINDS[which];
+                    updateDeviceKindPickerLabel();
+                    dialog.dismiss();
+                })
+                .show();
+    }
+
+    private void updateDeviceKindPickerLabel() {
+        if (deviceKindPicker == null) return;
+        String kind = normalizeDeviceKind(selectedDeviceKind);
+        int accent = deviceKindAccent(kind);
+        deviceKindPicker.setText(deviceKindLabel(this, kind) + " ▾");
+        deviceKindPicker.setTextColor(accent);
+        deviceKindPicker.setBackground(strokedRect(
+                Color.argb(60, Color.red(accent), Color.green(accent), Color.blue(accent)),
+                accent,
+                dp(14),
+                dp(1)
+        ));
+    }
+
+    /** Family of a URL: the saved device's family, else the picker's current choice. */
+    private String currentDeviceKindForUrl(String url) {        if (preferences != null) {
+            for (SavedConnection connection : readSavedConnections()) {
+                if (sameConnectionUrl(connection.url, url)) {
+                    return normalizeDeviceKind(connection.kind);
+                }
+            }
+        }
+        return normalizeDeviceKind(selectedDeviceKind);
+    }
+
+    /**
+     * Remembers which device the WebView is currently showing. The device switcher, the
+     * welcome list and the background task monitor all key off this.
+     */
+    private void markCurrentDevice(String url) {
+        if (preferences == null || url == null || url.trim().isEmpty()) return;
+        String kind = currentDeviceKindForUrl(url);
+        selectedDeviceKind = kind;
+        preferences.edit()
+                .putString(KEY_CURRENT_DEVICE_URL, url)
+                .putString(KEY_CURRENT_DEVICE_KIND, kind)
+                .apply();
+        updateDeviceKindPickerLabel();
+        refreshWelcomeDevices();
+        refreshMiniMenuDeviceSubtitle();
+    }
+
+    /** Subtitle of the floating menu's device row: family + name of the active device. */
+    private String currentDeviceSummary() {
+        if (preferences == null) return "";
+        String url = preferences.getString(KEY_CURRENT_DEVICE_URL, "");
+        if (url == null || url.trim().isEmpty()) {
+            url = preferences.getString(KEY_LAST_URL, "");
+        }
+        if (url == null || url.trim().isEmpty()) return getString(R.string.device_switch);
+        String kind = normalizeDeviceKind(
+                preferences.getString(KEY_CURRENT_DEVICE_KIND, DEVICE_KIND_MINIAPP)
+        );
+        String name = shortHost(url);
+        for (SavedConnection connection : readSavedConnections()) {
+            if (sameConnectionUrl(connection.url, url)) {
+                name = connection.displayName(this);
+                kind = normalizeDeviceKind(connection.kind);
+                break;
+            }
+        }
+        return getString(R.string.device_connected, deviceKindLabel(this, kind) + " · " + name);
+    }
+
+    private void refreshMiniMenuDeviceSubtitle() {
+        if (miniMenuDeviceSubtitle != null) {
+            miniMenuDeviceSubtitle.setText(currentDeviceSummary());
+        }
+    }
+
     private void refreshSavedConnectionsSummary() {
-        if (savedConnectionsSubtitle == null) return;
-        int count = readSavedConnections().size();
-        savedConnectionsSubtitle.setText(count == 0
-                ? getString(R.string.saved_connections_empty)
-                : getString(R.string.saved_connections_count, count));
+        // The welcome screen's device list is the visible summary of saved connections.
+        refreshWelcomeDevices();
     }
 
     private List<SavedConnection> readSavedConnections() {
@@ -4317,9 +4712,12 @@ public class MainActivity extends Activity {
                 if (item == null) continue;
                 String url = item.optString("url", "").trim();
                 if (url.isEmpty()) continue;
+                String kind = item.optString("kind", "").trim();
+                if (kind.isEmpty()) kind = detectDeviceKind(url);
                 result.add(new SavedConnection(
                         url,
                         item.optString("name", "").trim(),
+                        kind,
                         item.optLong("lastUsedAt", 0L)
                 ));
             }
@@ -4335,6 +4733,7 @@ public class MainActivity extends Activity {
                 JSONObject item = new JSONObject();
                 item.put("url", connection.url);
                 item.put("name", connection.name);
+                item.put("kind", normalizeDeviceKind(connection.kind));
                 item.put("lastUsedAt", connection.lastUsedAt);
                 array.put(item);
             } catch (Exception ignored) {
@@ -4344,7 +4743,20 @@ public class MainActivity extends Activity {
         refreshSavedConnectionsSummary();
     }
 
+    /**
+     * Remembers a connection that just worked. Called after a successful load, so it
+     * must never overwrite a family the user set by hand.
+     */
     private void saveSuccessfulConnection(String rawUrl) {
+        rememberDevice(rawUrl, null);
+    }
+
+    /** Remembers a connection with an explicit device family (add-device form). */
+    private void saveSuccessfulConnection(String rawUrl, String kind) {
+        rememberDevice(rawUrl, normalizeDeviceKind(kind));
+    }
+
+    private void rememberDevice(String rawUrl, String requestedKind) {
         String url = normalizeUrl(rawUrl);
         if (url.isEmpty()) return;
         List<SavedConnection> connections = readSavedConnections();
@@ -4355,8 +4767,21 @@ public class MainActivity extends Activity {
                 break;
             }
         }
-        if (existing != null) connections.remove(existing);
-        else existing = new SavedConnection(url, "", 0L);
+        if (existing != null) {
+            connections.remove(existing);
+            if (requestedKind != null) existing.kind = requestedKind;
+        } else {
+            // New device: honour the family picked in the form, otherwise infer it from
+            // the URL so a pasted zcode/dsh address lands in the right group by itself.
+            String resolvedKind = requestedKind;
+            if (resolvedKind == null) {
+                String picked = normalizeDeviceKind(selectedDeviceKind);
+                resolvedKind = DEVICE_KIND_MINIAPP.equals(picked)
+                        ? detectDeviceKind(url)
+                        : picked;
+            }
+            existing = new SavedConnection(url, "", resolvedKind, 0L);
+        }
         existing.url = url;
         existing.lastUsedAt = System.currentTimeMillis();
         connections.add(0, existing);
@@ -4498,14 +4923,23 @@ public class MainActivity extends Activity {
         rowParams.setMargins(0, 0, 0, dp(10));
         row.setLayoutParams(rowParams);
 
-        ImageView icon = boxedVectorIcon(
-                R.drawable.ic_welcome_link,
-                Color.rgb(80, 216, 206),
-                Color.argb(42, 70, 201, 194),
-                dp(12),
-                dp(7)
-        );
-        row.addView(icon, new LinearLayout.LayoutParams(dp(38), dp(38)));
+        int accent = deviceKindAccent(connection.kind);
+        TextView badge = new TextView(this);
+        badge.setText(deviceKindBadge(connection.kind));
+        badge.setTextSize(11);
+        badge.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        badge.setTextColor(accent);
+        badge.setGravity(Gravity.CENTER);
+        badge.setBackground(strokedRect(
+                Color.argb(60, Color.red(accent), Color.green(accent), Color.blue(accent)),
+                accent,
+                dp(11),
+                dp(1)
+        ));
+        badge.setClickable(true);
+        badge.setContentDescription(getString(R.string.device_change_kind));
+        badge.setOnClickListener(view -> showConnectionKindPicker(connection, connections, badge));
+        row.addView(badge, new LinearLayout.LayoutParams(dp(46), dp(34)));
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
@@ -4610,6 +5044,59 @@ public class MainActivity extends Activity {
         button.setClickable(true);
         button.setFocusable(true);
         return button;
+    }
+
+    /** Lets the user re-assign a saved device's family (local WebUI / zcode / dsh / …). */
+    private void showConnectionKindPicker(
+            SavedConnection connection,
+            List<SavedConnection> connections,
+            TextView badge
+    ) {
+        if (connection == null) return;
+        String[] labels = new String[DEVICE_KINDS.length];
+        int checked = 0;
+        for (int index = 0; index < DEVICE_KINDS.length; index++) {
+            labels[index] = deviceKindLabel(this, DEVICE_KINDS[index]);
+            if (DEVICE_KINDS[index].equals(normalizeDeviceKind(connection.kind))) {
+                checked = index;
+            }
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.device_change_kind)
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    connection.kind = DEVICE_KINDS[which];
+                    writeSavedConnections(connections);
+                    if (badge != null) {
+                        int accent = deviceKindAccent(connection.kind);
+                        badge.setText(deviceKindBadge(connection.kind));
+                        badge.setTextColor(accent);
+                        badge.setBackground(strokedRect(
+                                Color.argb(
+                                        60,
+                                        Color.red(accent),
+                                        Color.green(accent),
+                                        Color.blue(accent)
+                                ),
+                                accent,
+                                dp(11),
+                                dp(1)
+                        ));
+                    }
+                    if (sameConnectionUrl(
+                            connection.url,
+                            preferences.getString(KEY_CURRENT_DEVICE_URL, "")
+                    )) {
+                        preferences.edit()
+                                .putString(
+                                        KEY_CURRENT_DEVICE_KIND,
+                                        normalizeDeviceKind(connection.kind)
+                                )
+                                .apply();
+                    }
+                    refreshWelcomeDevices();
+                    dialog.dismiss();
+                })
+                .show();
     }
 
     private void showRenameConnectionDialog(
@@ -5539,6 +6026,7 @@ public class MainActivity extends Activity {
         availableLocalApiBase = null;
         pendingConnectionUrl = url;
         preferences.edit().putString(KEY_LAST_URL, url).apply();
+        markCurrentDevice(url);
         boolean revealingFromWelcome = prepareMainPageReveal();
         if (!revealingFromWelcome) showApp();
         urlInput.setText(url);
@@ -9334,11 +9822,17 @@ public class MainActivity extends Activity {
     private static final class SavedConnection {
         String url;
         String name;
+        String kind;
         long lastUsedAt;
 
         SavedConnection(String url, String name, long lastUsedAt) {
+            this(url, name, detectDeviceKind(url), lastUsedAt);
+        }
+
+        SavedConnection(String url, String name, String kind, long lastUsedAt) {
             this.url = url;
             this.name = name;
+            this.kind = normalizeDeviceKind(kind);
             this.lastUsedAt = lastUsedAt;
         }
 

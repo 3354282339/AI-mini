@@ -1,5 +1,18 @@
 <resources>
     <string name="app_name">AI mini</string>
+    <string name="device_kind_miniapp">本地 WebUI</string>
+    <string name="device_kind_zcode">zcode</string>
+    <string name="device_kind_dsh">dsh</string>
+    <string name="device_kind_other">其它</string>
+    <string name="my_devices">我的设备</string>
+    <string name="my_devices_count">共 %1$d 台</string>
+    <string name="my_devices_empty">还没有保存的设备，连接成功后会自动出现在这里</string>
+    <string name="my_devices_manage">管理设备</string>
+    <string name="my_devices_more">查看全部 %1$d 台</string>
+    <string name="device_kind_pick">设备类型</string>
+    <string name="device_switch">切换设备</string>
+    <string name="device_connected">已连接 %1$s</string>
+    <string name="device_change_kind">修改类型</string>
     <string name="url_hint">输入 AI mini 网址</string>
     <string name="url_example">http://电脑IP:8787/?token=...</string>
     <string name="open_url">打开</string>
