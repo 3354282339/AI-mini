@@ -273,6 +273,8 @@ public class MainActivity extends Activity {
     /** Family picked in the add-device form when the URL does not match a saved device. */
     private String selectedDeviceKind = DEVICE_KIND_MINIAPP;
     private TextView deviceKindPicker;
+    /** 「添加设备」弹窗里的网址输入框；扫码结果会填进这里（null = 不在添加流程）。 */
+    private EditText pendingAddDeviceUrlInput;
     private String pendingConnectionUrl;
     private boolean waitingForMainPageReveal;
     private ImageView mainNavigationCover;
@@ -717,37 +719,7 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT
         ));
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.VERTICAL);
-        actions.setGravity(Gravity.CENTER);
-        card.addView(actions, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        ));
-
-        LinearLayout scan = createConnectionAction(
-                R.string.scan_connect,
-                R.string.scan_subtitle,
-                ConnectionIconView.TYPE_SCAN,
-                true
-        );
-        scan.setOnClickListener(view -> startQrScan());
-        actions.addView(scan, connectionActionParams(false));
-
-        continueButton = createConnectionAction(
-                R.string.continue_last_title,
-                R.string.continue_last_subtitle,
-                ConnectionIconView.TYPE_HISTORY,
-                false
-        );
-        continueTitle = (TextView) continueButton.getTag(R.id.saved_connection_title);
-        continueSubtitle = (TextView) continueButton.getTag(R.id.saved_connection_subtitle);
-        continueButton.setOnClickListener(view -> {
-            String lastUrl = preferences.getString(KEY_LAST_URL, "");
-            if (!lastUrl.isEmpty()) loadUrl(lastUrl);
-        });
-        actions.addView(continueButton, connectionActionParams(true));
-
+        // 首页即设备管理页：设备列表 + 底部「添加设备」。扫码、手动输入都挪进添加弹窗。
         // Device list: every saved connection is one device, grouped by family. Future
         // products (zcode, dsh, …) get their own badge here without further UI work.
         LinearLayout devices = new LinearLayout(this);
@@ -793,175 +765,33 @@ public class MainActivity extends Activity {
         devices.addView(deviceList, deviceListParams);
         refreshWelcomeDevices();
 
-        LinearLayout kindRow = new LinearLayout(this);
-        kindRow.setOrientation(LinearLayout.HORIZONTAL);
-        kindRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams kindRowParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        kindRowParams.setMargins(0, dp(16), 0, 0);
-        card.addView(kindRow, kindRowParams);
-
-        TextView kindLabel = new TextView(this);
-        kindLabel.setText(R.string.device_kind_pick);
-        kindLabel.setTextSize(15);
-        kindLabel.setTextColor(Color.rgb(210, 219, 236));
-        kindLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        kindRow.addView(kindLabel, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+        // 「添加设备」入口。扫码与手动输入都收进了这个弹窗里
+        // （类型选择、名称、网址、扫码填充）。
+        TextView addDeviceButton = new TextView(this);
+        addDeviceButton.setText("＋  " + getString(R.string.device_add_action));
+        addDeviceButton.setTextSize(15);
+        addDeviceButton.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        addDeviceButton.setTextColor(Color.rgb(240, 248, 255));
+        addDeviceButton.setGravity(Gravity.CENTER);
+        addDeviceButton.setPadding(dp(16), dp(14), dp(16), dp(14));
+        addDeviceButton.setBackground(roundedGradient(
+                new int[]{Color.rgb(64, 208, 186), Color.rgb(88, 132, 255)},
+                dp(20)
         ));
-
-        deviceKindPicker = new TextView(this);
-        deviceKindPicker.setTextSize(13);
-        deviceKindPicker.setGravity(Gravity.CENTER);
-        deviceKindPicker.setPadding(dp(12), dp(7), dp(12), dp(7));
-        deviceKindPicker.setOnClickListener(view -> showDeviceKindPicker());
-        LinearLayout.LayoutParams pickerParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        pickerParams.setMargins(dp(10), 0, 0, 0);
-        kindRow.addView(deviceKindPicker, pickerParams);
-        updateDeviceKindPickerLabel();
-
-        TextView manualLabel = new TextView(this);
-        manualLabel.setText(R.string.manual_input);
-        manualLabel.setTextSize(17);
-        manualLabel.setTextColor(Color.rgb(210, 219, 236));
-        manualLabel.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        LinearLayout.LayoutParams manualParams = new LinearLayout.LayoutParams(
+        addDeviceButton.setElevation(dp(6));
+        addDeviceButton.setOnClickListener(view -> showAddDeviceDialog());
+        LinearLayout.LayoutParams addDeviceParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        manualParams.setMargins(dp(12), dp(17), 0, 0);
-        card.addView(manualLabel, manualParams);
+        addDeviceParams.setMargins(0, dp(14), 0, dp(4));
+        card.addView(addDeviceButton, addDeviceParams);
 
-        LinearLayout inputRow = new LinearLayout(this);
-        inputRow.setOrientation(LinearLayout.HORIZONTAL);
-        inputRow.setGravity(Gravity.CENTER_VERTICAL);
-        inputRow.setPadding(dp(10), dp(9), dp(9), dp(9));
-        inputRow.setBackground(strokedRect(Color.argb(230, 10, 25, 52), Color.argb(110, 77, 111, 171), dp(20), dp(1)));
-        LinearLayout.LayoutParams inputRowParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(64)
-        );
-        inputRowParams.setMargins(0, dp(9), 0, 0);
-        card.addView(inputRow, inputRowParams);
-
-        ImageView linkIcon = boxedVectorIcon(
-                R.drawable.ic_welcome_link,
-                Color.rgb(106, 137, 255),
-                Color.argb(78, 52, 100, 255),
-                dp(13),
-                dp(8)
-        );
-        linkIcon.setBackground(strokedRect(
-                Color.argb(78, 52, 100, 255),
-                Color.TRANSPARENT,
-                dp(13),
-                0
-        ));
-        inputRow.addView(linkIcon, new LinearLayout.LayoutParams(dp(42), dp(42)));
-
+        // 保留但不显示：扫码结果与外部 intent 仍会写入这个输入框，
+        // 所有既有代码路径都必须拿到非空的 EditText。
         welcomeUrlInput = new EditText(this);
         welcomeUrlInput.setSingleLine(true);
-        welcomeUrlInput.setTextColor(Color.WHITE);
-        welcomeUrlInput.setHintTextColor(Color.rgb(161, 174, 204));
-        welcomeUrlInput.setTextSize(15);
-        welcomeUrlInput.setHint(R.string.url_example);
-        welcomeUrlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        welcomeUrlInput.setImeOptions(EditorInfo.IME_ACTION_GO);
-        welcomeUrlInput.setBackgroundColor(Color.TRANSPARENT);
-        welcomeUrlInput.setPadding(dp(12), 0, dp(8), 0);
-        welcomeUrlInput.setOnEditorActionListener((view, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_GO) {
-                loadUrlFromWelcome();
-                return true;
-            }
-            return false;
-        });
-        inputRow.addView(welcomeUrlInput, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
-
-        Button connect = new Button(this);
-        connect.setText(R.string.connect);
-        connect.setTextSize(17);
-        connect.setTextColor(Color.WHITE);
-        connect.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        connect.setAllCaps(false);
-        connect.setMinHeight(0);
-        connect.setMinimumHeight(0);
-        connect.setBackground(roundedGradient(
-                new int[]{Color.rgb(66, 108, 255), Color.rgb(67, 220, 203)},
-                dp(17)
-        ));
-        connect.setOnClickListener(view -> loadUrlFromWelcome());
-        inputRow.addView(connect, new LinearLayout.LayoutParams(dp(88), dp(46)));
-
-        FrameLayout tip = new FrameLayout(this);
-        tip.setPadding(dp(14), dp(18), dp(14), dp(18));
-        tip.setBackground(strokedRect(Color.argb(198, 10, 23, 49), Color.argb(96, 77, 111, 171), dp(20), dp(1)));
-        LinearLayout.LayoutParams tipParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(118)
-        );
-        tipParams.setMargins(0, dp(17), 0, 0);
-        card.addView(tip, tipParams);
-
-        LinearLayout tipContent = new LinearLayout(this);
-        tipContent.setOrientation(LinearLayout.HORIZONTAL);
-        tipContent.setGravity(Gravity.TOP);
-        tip.addView(tipContent, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-        ));
-
-        ImageView shieldIcon = boxedVectorIcon(
-                R.drawable.ic_welcome_info,
-                Color.rgb(75, 214, 204),
-                Color.argb(50, 70, 201, 194),
-                dp(13),
-                dp(8)
-        );
-        shieldIcon.setBackground(strokedRect(
-                Color.argb(50, 70, 201, 194),
-                Color.TRANSPARENT,
-                dp(13),
-                0
-        ));
-        tipContent.addView(shieldIcon, new LinearLayout.LayoutParams(dp(38), dp(38)));
-
-        LinearLayout tipCopy = new LinearLayout(this);
-        tipCopy.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams tipCopyParams = new LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
-        );
-        tipCopyParams.setMargins(dp(12), 0, 0, 0);
-        tipContent.addView(tipCopy, tipCopyParams);
-
-        TextView tipTitle = new TextView(this);
-        tipTitle.setText(R.string.connection_tip_title);
-        tipTitle.setTextSize(18);
-        tipTitle.setTextColor(Color.WHITE);
-        tipTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        tipTitle.setIncludeFontPadding(false);
-        tipCopy.addView(tipTitle);
-
-        TextView tipText = new TextView(this);
-        tipText.setText(R.string.connection_tip_body);
-        tipText.setTextSize(11);
-        tipText.setTextColor(Color.rgb(166, 179, 207));
-        tipText.setLineSpacing(dp(4), 1f);
-        tipText.setIncludeFontPadding(false);
-        LinearLayout.LayoutParams tipTextParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        tipTextParams.setMargins(0, dp(9), 0, 0);
-        tipCopy.addView(tipText, tipTextParams);
+        welcomeUrlInput.setVisibility(View.GONE);
 
         TextView footer = new TextView(this);
         footer.setText("▢  " + getString(R.string.no_data_saved));
@@ -4283,6 +4113,9 @@ public class MainActivity extends Activity {
     }
 
     private void configureContinueButton(String lastUrl) {
+        // The dedicated “continue last” shortcut was replaced by the device list; the
+        // view only exists in older layouts, so everything here is defensive.
+        if (continueButton == null || continueTitle == null || continueSubtitle == null) return;
         boolean enabled = lastUrl != null && !lastUrl.isEmpty();
         continueButton.setEnabled(enabled);
         continueButton.setAlpha(enabled ? 1f : 0.52f);
@@ -4453,12 +4286,55 @@ public class MainActivity extends Activity {
         return "Web";
     }
 
-    /** Accent colour per family so devices are distinguishable at a glance. */
+    /**
+     * 每种设备类型的流光渐变（浅 → 主色 → 深）。首页卡片、徽标与选中态都用它，
+     * 让三类产品一眼可辨：
+     * 本地 WebUI = 白绿青流光，zcode = 黑白流光，dsh = DeepSeek 蓝白流光。
+     */
+    static int[] deviceKindGradient(String kind) {
+        if (DEVICE_KIND_ZCODE.equals(kind)) {
+            return new int[]{
+                    Color.rgb(248, 250, 253),
+                    Color.rgb(158, 167, 181),
+                    Color.rgb(58, 63, 74)
+            };
+        }
+        if (DEVICE_KIND_DSH.equals(kind)) {
+            return new int[]{
+                    Color.rgb(206, 228, 255),
+                    Color.rgb(78, 140, 255),
+                    Color.rgb(28, 74, 210)
+            };
+        }
+        if (DEVICE_KIND_OTHER.equals(kind)) {
+            return new int[]{
+                    Color.rgb(232, 220, 255),
+                    Color.rgb(160, 132, 255),
+                    Color.rgb(96, 68, 200)
+            };
+        }
+        return new int[]{
+                Color.rgb(226, 255, 245),
+                Color.rgb(72, 226, 190),
+                Color.rgb(46, 190, 214)
+        };
+    }
+
+    /** 强调色（渐变主色），用于文字与徽标边框。 */
     static int deviceKindAccent(String kind) {
-        if (DEVICE_KIND_ZCODE.equals(kind)) return Color.rgb(126, 171, 255);
-        if (DEVICE_KIND_DSH.equals(kind)) return Color.rgb(126, 231, 190);
-        if (DEVICE_KIND_OTHER.equals(kind)) return Color.rgb(196, 168, 255);
-        return Color.rgb(106, 137, 255);
+        return deviceKindGradient(kind)[1];
+    }
+
+    /** 卡片底色：类型主色的极低透明度叠加，保持深色底但能看出分类。 */
+    static int deviceKindCardBackground(String kind, boolean current) {
+        int accent = deviceKindAccent(kind);
+        int alpha = current ? 96 : 58;
+        return Color.argb(
+                alpha,
+                Math.min(255, Color.red(accent) / 3 + 8),
+                Math.min(255, Color.green(accent) / 3 + 12),
+                Math.min(255, Color.blue(accent) / 3 + 26)
+        );
     }
 
     static String normalizeDeviceKind(String kind) {
@@ -4507,21 +4383,57 @@ public class MainActivity extends Activity {
             return;
         }
         String currentUrl = preferences.getString(KEY_CURRENT_DEVICE_URL, "");
-        int shown = 0;
-        for (SavedConnection connection : connections) {
-            if (shown >= WELCOME_DEVICE_LIMIT) break;
-            deviceList.addView(deviceRow(
-                    connection,
-                    sameConnectionUrl(connection.url, currentUrl)
-            ));
-            shown += 1;
-        }
-        if (connections.size() > shown) {
-            deviceList.addView(deviceListLink(
-                    getString(R.string.my_devices_more, connections.size())
-            ));
+        // 按产品分组，像联系人分组一样：一眼看出哪台属于哪一类。
+        for (String kind : DEVICE_KINDS) {
+            List<SavedConnection> group = new ArrayList<>();
+            for (SavedConnection connection : connections) {
+                if (normalizeDeviceKind(connection.kind).equals(kind)) group.add(connection);
+            }
+            if (group.isEmpty()) continue;
+            deviceList.addView(deviceGroupHeader(kind, group.size()));
+            for (SavedConnection connection : group) {
+                deviceList.addView(deviceRow(
+                        connection,
+                        sameConnectionUrl(connection.url, currentUrl)
+                ));
+            }
         }
         deviceList.addView(deviceListLink(getString(R.string.my_devices_manage)));
+    }
+
+    /** 分组标题：流光小条 + 「类型 · N 台」。 */
+    private View deviceGroupHeader(String kind, int count) {
+        int[] gradient = deviceKindGradient(kind);
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        params.setMargins(dp(2), dp(16), dp(2), dp(2));
+        header.setLayoutParams(params);
+
+        View bar = new View(this);
+        bar.setBackground(roundedGradient(new int[]{gradient[0], gradient[1]}, dp(2)));
+        header.addView(bar, new LinearLayout.LayoutParams(dp(16), dp(3)));
+
+        TextView label = new TextView(this);
+        label.setText(getString(
+                R.string.device_group_label,
+                deviceKindLabel(this, kind),
+                count
+        ));
+        label.setTextSize(12);
+        label.setTextColor(gradient[0]);
+        label.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        labelParams.setMargins(dp(8), 0, 0, 0);
+        header.addView(label, labelParams);
+        return header;
     }
 
     private TextView deviceListLink(String text) {
@@ -4534,33 +4446,40 @@ public class MainActivity extends Activity {
         return link;
     }
 
-    /** One device row: family badge, name, family + host, tap to connect. */
+    /** 一台设备的卡片：流光竖条 + 类型徽标 + 名称/主机；点击进入，⋯ 或长按管理。 */
     private View deviceRow(SavedConnection connection, boolean current) {
+        String kind = normalizeDeviceKind(connection.kind);
+        int[] gradient = deviceKindGradient(kind);
+
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(10), dp(10), dp(10));
-        int accent = deviceKindAccent(connection.kind);
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
         row.setBackground(strokedRect(
-                current ? Color.argb(210, 16, 40, 74) : Color.argb(170, 8, 20, 42),
-                current ? accent : Color.argb(90, 77, 111, 171),
-                dp(16),
-                dp(1)
+                deviceKindCardBackground(kind, current),
+                current ? gradient[1] : Color.argb(92, 84, 112, 170),
+                dp(18),
+                current ? 2 : 1
         ));
+        if (current) row.setElevation(dp(4));
+
+        View stripe = new View(this);
+        stripe.setBackground(roundedGradient(
+                new int[]{gradient[0], gradient[1], gradient[2]},
+                dp(2)
+        ));
+        row.addView(stripe, new LinearLayout.LayoutParams(dp(4), dp(36)));
 
         TextView badge = new TextView(this);
-        badge.setText(deviceKindBadge(connection.kind));
-        badge.setTextSize(11);
+        badge.setText(deviceKindBadge(kind));
+        badge.setTextSize(10);
         badge.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        badge.setTextColor(accent);
+        badge.setTextColor(Color.rgb(10, 20, 32));
         badge.setGravity(Gravity.CENTER);
-        badge.setBackground(strokedRect(
-                Color.argb(60, Color.red(accent), Color.green(accent), Color.blue(accent)),
-                accent,
-                dp(9),
-                dp(1)
-        ));
-        row.addView(badge, new LinearLayout.LayoutParams(dp(48), dp(30)));
+        badge.setBackground(roundedGradient(new int[]{gradient[0], gradient[1]}, dp(10)));
+        LinearLayout.LayoutParams badgeParams = new LinearLayout.LayoutParams(dp(44), dp(24));
+        badgeParams.setMargins(dp(10), 0, 0, 0);
+        row.addView(badge, badgeParams);
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
@@ -4569,27 +4488,68 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 1f
         );
-        copyParams.setMargins(dp(10), 0, 0, 0);
+        copyParams.setMargins(dp(10), 0, dp(8), 0);
         row.addView(copy, copyParams);
 
         TextView name = new TextView(this);
         name.setText(connection.displayName(this));
         name.setTextSize(14);
-        name.setTextColor(Color.rgb(238, 243, 255));
+        name.setTextColor(Color.rgb(240, 245, 255));
         name.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         name.setSingleLine(true);
         name.setEllipsize(TextUtils.TruncateAt.END);
         copy.addView(name);
 
         TextView meta = new TextView(this);
-        meta.setText(deviceKindLabel(this, connection.kind) + " · " + shortHost(connection.url));
+        meta.setText(shortHost(connection.url));
         meta.setTextSize(11);
         meta.setTextColor(Color.rgb(150, 163, 191));
         meta.setSingleLine(true);
         meta.setEllipsize(TextUtils.TruncateAt.END);
         copy.addView(meta);
 
+        if (current) {
+            TextView currentTag = new TextView(this);
+            currentTag.setText(R.string.device_current);
+            currentTag.setTextSize(10);
+            currentTag.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            currentTag.setTextColor(gradient[0]);
+            currentTag.setGravity(Gravity.CENTER);
+            currentTag.setPadding(dp(8), dp(4), dp(8), dp(4));
+            currentTag.setBackground(strokedRect(
+                    Color.argb(
+                            70,
+                            Color.red(gradient[1]),
+                            Color.green(gradient[1]),
+                            Color.blue(gradient[1])
+                    ),
+                    gradient[1],
+                    dp(10),
+                    dp(1)
+            ));
+            row.addView(currentTag);
+        }
+
+        TextView more = new TextView(this);
+        more.setText("⋯");
+        more.setTextSize(18);
+        more.setTextColor(Color.rgb(172, 186, 214));
+        more.setGravity(Gravity.CENTER);
+        more.setPadding(dp(10), dp(4), dp(6), dp(4));
+        more.setContentDescription(getString(R.string.device_manage));
+        more.setOnClickListener(view -> showDeviceActionsDialog(connection));
+        LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        moreParams.setMargins(dp(6), 0, 0, 0);
+        row.addView(more, moreParams);
+
         row.setOnClickListener(view -> connectToDevice(connection));
+        row.setOnLongClickListener(view -> {
+            showDeviceActionsDialog(connection);
+            return true;
+        });
         LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -4597,6 +4557,326 @@ public class MainActivity extends Activity {
         rowParams.setMargins(0, dp(6), 0, 0);
         row.setLayoutParams(rowParams);
         return row;
+    }
+
+    /**
+     * 设备操作菜单（进入 / 重命名 / 修改类型 / 删除），全部走 App 风格弹窗。
+     */
+    private void showDeviceActionsDialog(SavedConnection connection) {
+        if (connection == null) return;
+        String kind = normalizeDeviceKind(connection.kind);
+
+        LinearLayout panel = appDialogPanel();
+        panel.addView(appDialogTitle(connection.displayName(this)));
+        TextView meta = appDialogHint(
+                deviceKindLabel(this, kind) + " · " + shortHost(connection.url)
+        );
+        LinearLayout.LayoutParams metaParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        metaParams.setMargins(0, dp(8), 0, dp(14));
+        panel.addView(meta, metaParams);
+
+        Dialog dialog = showAppDialog(panel, 340);
+
+        panel.addView(appDialogActionRow(
+                getString(R.string.device_enter),
+                view -> {
+                    dialog.dismiss();
+                    connectToDevice(connection);
+                }
+        ));
+        panel.addView(appDialogActionRow(
+                getString(R.string.device_rename),
+                view -> {
+                    dialog.dismiss();
+                    showRenameDeviceDialog(connection);
+                }
+        ));
+        panel.addView(appDialogActionRow(
+                getString(R.string.device_change_kind),
+                view -> {
+                    dialog.dismiss();
+                    showDeviceKindEditor(connection);
+                }
+        ));
+        panel.addView(appDialogActionRow(
+                getString(R.string.delete),
+                view -> {
+                    dialog.dismiss();
+                    confirmDeleteDevice(connection);
+                }
+        ));
+    }
+
+    private TextView appDialogActionRow(String text, View.OnClickListener listener) {
+        TextView row = new TextView(this);
+        row.setText(text);
+        row.setTextSize(15);
+        row.setTextColor(Color.rgb(232, 240, 255));
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(13), dp(14), dp(13));
+        row.setBackground(strokedRect(
+                Color.argb(150, 14, 28, 54),
+                Color.argb(92, 84, 112, 170),
+                dp(14),
+                dp(1)
+        ));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        params.setMargins(0, dp(6), 0, 0);
+        row.setLayoutParams(params);
+        row.setOnClickListener(listener);
+        return row;
+    }
+
+    /** 重命名设备（App 风格弹窗）。 */
+    private void showRenameDeviceDialog(SavedConnection connection) {
+        if (connection == null) return;
+        LinearLayout panel = appDialogPanel();
+        panel.addView(appDialogTitle(getString(R.string.device_rename)));
+
+        EditText input = appDialogInput(
+                getString(R.string.saved_connection_name_hint),
+                connection.name == null || connection.name.trim().isEmpty()
+                        ? connection.displayName(this)
+                        : connection.name.trim(),
+                false
+        );
+        LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        inputParams.setMargins(0, dp(14), 0, 0);
+        panel.addView(input, inputParams);
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams buttonsParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        buttonsParams.setMargins(0, dp(16), 0, 0);
+        panel.addView(buttons, buttonsParams);
+
+        Dialog dialog = showAppDialog(panel, 340);
+
+        TextView cancel = appDialogSecondaryButton(
+                getString(R.string.add_device_cancel),
+                view -> dialog.dismiss()
+        );
+        LinearLayout.LayoutParams cancelParams = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
+        cancelParams.setMargins(0, 0, dp(5), 0);
+        buttons.addView(cancel, cancelParams);
+
+        TextView save = appDialogPrimaryButton(
+                getString(R.string.add_device_save),
+                connection.kind,
+                view -> {
+                    connection.name = input.getText().toString().trim();
+                    writeSavedConnections(readSavedConnectionsWith(connection));
+                    refreshWelcomeDevices();
+                    refreshMiniMenuDeviceSubtitle();
+                    dialog.dismiss();
+                }
+        );
+        LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
+        saveParams.setMargins(dp(5), 0, 0, 0);
+        buttons.addView(save, saveParams);
+    }
+
+    /** 把改过的设备写回列表（按 URL 匹配替换）。 */
+    private List<SavedConnection> readSavedConnectionsWith(SavedConnection updated) {
+        List<SavedConnection> connections = readSavedConnections();
+        for (int index = 0; index < connections.size(); index++) {
+            if (sameConnectionUrl(connections.get(index).url, updated.url)) {
+                connections.set(index, updated);
+                break;
+            }
+        }
+        return connections;
+    }
+
+    /** 修改设备类型（流光 chips，App 风格弹窗）。 */
+    private void showDeviceKindEditor(SavedConnection connection) {
+        if (connection == null) return;
+        final String[] picked = new String[]{normalizeDeviceKind(connection.kind)};
+
+        LinearLayout panel = appDialogPanel();
+        panel.addView(appDialogTitle(getString(R.string.device_change_kind)));
+        TextView hint = appDialogHint(deviceKindLabel(this, picked[0]) + " · " + shortHost(connection.url));
+        LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        hintParams.setMargins(0, dp(8), 0, dp(16));
+        panel.addView(hint, hintParams);
+
+        LinearLayout chips = new LinearLayout(this);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        panel.addView(chips, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
+        List<TextView> chipViews = new ArrayList<>();
+        for (String kind : DEVICE_KINDS) {
+            TextView chip = new TextView(this);
+            chip.setText(deviceKindLabel(this, kind));
+            chip.setTextSize(12);
+            chip.setGravity(Gravity.CENTER);
+            chip.setPadding(dp(8), dp(9), dp(8), dp(9));
+            LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+            );
+            chipParams.setMargins(dp(3), 0, dp(3), 0);
+            chip.setOnClickListener(view -> {
+                picked[0] = kind;
+                for (int index = 0; index < chipViews.size(); index++) {
+                    styleKindChip(
+                            chipViews.get(index),
+                            DEVICE_KINDS[index],
+                            DEVICE_KINDS[index].equals(kind)
+                    );
+                }
+                hint.setText(deviceKindLabel(this, kind) + " · " + shortHost(connection.url));
+            });
+            chipViews.add(chip);
+            chips.addView(chip, chipParams);
+        }
+        for (int index = 0; index < chipViews.size(); index++) {
+            styleKindChip(
+                    chipViews.get(index),
+                    DEVICE_KINDS[index],
+                    DEVICE_KINDS[index].equals(picked[0])
+            );
+        }
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams buttonsParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        buttonsParams.setMargins(0, dp(18), 0, 0);
+        panel.addView(buttons, buttonsParams);
+
+        Dialog dialog = showAppDialog(panel, 350);
+
+        TextView cancel = appDialogSecondaryButton(
+                getString(R.string.add_device_cancel),
+                view -> dialog.dismiss()
+        );
+        LinearLayout.LayoutParams cancelParams = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
+        cancelParams.setMargins(0, 0, dp(5), 0);
+        buttons.addView(cancel, cancelParams);
+
+        TextView save = appDialogPrimaryButton(
+                getString(R.string.add_device_save),
+                picked[0],
+                view -> {
+                    connection.kind = picked[0];
+                    writeSavedConnections(readSavedConnectionsWith(connection));
+                    if (sameConnectionUrl(
+                            connection.url,
+                            preferences.getString(KEY_CURRENT_DEVICE_URL, "")
+                    )) {
+                        preferences.edit()
+                                .putString(KEY_CURRENT_DEVICE_KIND, picked[0])
+                                .apply();
+                    }
+                    refreshWelcomeDevices();
+                    refreshMiniMenuDeviceSubtitle();
+                    dialog.dismiss();
+                }
+        );
+        LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
+        saveParams.setMargins(dp(5), 0, 0, 0);
+        buttons.addView(save, saveParams);
+    }
+
+    /** 删除设备确认（App 风格弹窗）。 */
+    private void confirmDeleteDevice(SavedConnection connection) {
+        if (connection == null) return;
+        LinearLayout panel = appDialogPanel();
+        panel.addView(appDialogTitle(getString(R.string.device_delete_title)));
+        TextView body = appDialogHint(getString(
+                R.string.device_delete_confirm,
+                connection.displayName(this)
+        ));
+        LinearLayout.LayoutParams bodyParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        bodyParams.setMargins(0, dp(10), 0, 0);
+        panel.addView(body, bodyParams);
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams buttonsParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        buttonsParams.setMargins(0, dp(18), 0, 0);
+        panel.addView(buttons, buttonsParams);
+
+        Dialog dialog = showAppDialog(panel, 340);
+
+        TextView cancel = appDialogSecondaryButton(
+                getString(R.string.add_device_cancel),
+                view -> dialog.dismiss()
+        );
+        LinearLayout.LayoutParams cancelParams = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
+        cancelParams.setMargins(0, 0, dp(5), 0);
+        buttons.addView(cancel, cancelParams);
+
+        TextView confirm = appDialogSecondaryButton(
+                getString(R.string.delete),
+                view -> {
+                    List<SavedConnection> remaining = new ArrayList<>();
+                    for (SavedConnection item : readSavedConnections()) {
+                        if (sameConnectionUrl(item.url, connection.url)) continue;
+                        remaining.add(item);
+                    }
+                    writeSavedConnections(remaining);
+                    refreshWelcomeDevices();
+                    refreshMiniMenuDeviceSubtitle();
+                    dialog.dismiss();
+                }
+        );
+        confirm.setTextColor(Color.rgb(255, 118, 130));
+        LinearLayout.LayoutParams confirmParams = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
+        confirmParams.setMargins(dp(5), 0, 0, 0);
+        buttons.addView(confirm, confirmParams);
     }
 
     /** Connects to a saved device and keeps its family as the “add device” default. */
@@ -4620,23 +4900,307 @@ public class MainActivity extends Activity {
         return url == null ? "" : url;
     }
 
-    private void showDeviceKindPicker() {
-        String[] labels = new String[DEVICE_KINDS.length];
-        int checked = 0;
-        for (int index = 0; index < DEVICE_KINDS.length; index++) {
-            labels[index] = deviceKindLabel(this, DEVICE_KINDS[index]);
-            if (DEVICE_KINDS[index].equals(normalizeDeviceKind(selectedDeviceKind))) {
-                checked = index;
+    // ------------------------------------------------------------- App 风格对话框
+
+    /**
+     * 统一的 App 风格对话框：深色圆角面板 + 透明窗口背景。
+     * 用来替换系统的 AlertDialog —— 后者在这些设备/通知场景下会露出灰底默认样式。
+     */
+    private Dialog showAppDialog(View panel, int widthDp) {
+        Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        dialog.setContentView(panel);
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            window.setDimAmount(0.82f);
+            window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        }
+        dialog.setCanceledOnTouchOutside(true);
+        dialog.show();
+        if (window != null) {
+            window.setLayout(
+                    Math.min(
+                            getResources().getDisplayMetrics().widthPixels - dp(36),
+                            dp(widthDp)
+                    ),
+                    WindowManager.LayoutParams.WRAP_CONTENT
+            );
+        }
+        return dialog;
+    }
+
+    private LinearLayout appDialogPanel() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(18), dp(20), dp(18), dp(18));
+        panel.setBackground(strokedRect(
+                Color.rgb(6, 15, 32),
+                Color.argb(165, 90, 122, 186),
+                dp(26),
+                dp(1)
+        ));
+        return panel;
+    }
+
+    private TextView appDialogTitle(String text) {
+        TextView title = new TextView(this);
+        title.setText(text);
+        title.setTextSize(20);
+        title.setTextColor(Color.rgb(244, 248, 255));
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return title;
+    }
+
+    private TextView appDialogHint(String text) {
+        TextView hint = new TextView(this);
+        hint.setText(text);
+        hint.setTextSize(12);
+        hint.setTextColor(Color.rgb(158, 172, 201));
+        hint.setLineSpacing(dp(3), 1f);
+        return hint;
+    }
+
+    private EditText appDialogInput(String hint, String value, boolean uri) {
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setText(value == null ? "" : value);
+        input.setHint(hint);
+        input.setTextColor(Color.WHITE);
+        input.setHintTextColor(Color.rgb(126, 141, 173));
+        input.setTextSize(15);
+        input.setPadding(dp(14), dp(12), dp(14), dp(12));
+        input.setBackground(strokedRect(
+                Color.argb(220, 10, 24, 50),
+                Color.argb(125, 84, 112, 170),
+                dp(16),
+                dp(1)
+        ));
+        input.setInputType(uri
+                ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI
+                : InputType.TYPE_CLASS_TEXT);
+        return input;
+    }
+
+    /** 主按钮：套用设备类型的流光渐变。 */
+    private TextView appDialogPrimaryButton(
+            String text,
+            String kind,
+            View.OnClickListener listener
+    ) {
+        TextView button = new TextView(this);
+        button.setText(text);
+        button.setTextSize(15);
+        button.setTextColor(Color.rgb(10, 20, 32));
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(14), dp(13), dp(14), dp(13));
+        applyPrimaryButtonSkin(button, kind);
+        if (listener != null) button.setOnClickListener(listener);
+        return button;
+    }
+
+    private void applyPrimaryButtonSkin(TextView button, String kind) {
+        int[] gradient = deviceKindGradient(kind);
+        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        button.setBackground(roundedGradient(
+                new int[]{gradient[0], gradient[1]},
+                dp(18)
+        ));
+    }
+
+    private TextView appDialogSecondaryButton(String text, View.OnClickListener listener) {
+        TextView button = new TextView(this);
+        button.setText(text);
+        button.setTextSize(15);
+        button.setTextColor(Color.rgb(206, 217, 238));
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(14), dp(13), dp(14), dp(13));
+        button.setBackground(strokedRect(
+                Color.argb(130, 18, 32, 60),
+                Color.argb(115, 92, 118, 172),
+                dp(18),
+                dp(1)
+        ));
+        if (listener != null) button.setOnClickListener(listener);
+        return button;
+    }
+
+    /** 类型 chip 的选中/未选中皮肤（流光渐变 vs 描边）。 */
+    private void styleKindChip(TextView chip, String kind, boolean selected) {
+        int[] gradient = deviceKindGradient(kind);
+        if (selected) {
+            chip.setTextColor(Color.rgb(10, 20, 32));
+            chip.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+            chip.setBackground(roundedGradient(
+                    new int[]{gradient[0], gradient[1]},
+                    dp(16)
+            ));
+        } else {
+            chip.setTextColor(gradient[0]);
+            chip.setTypeface(Typeface.DEFAULT, Typeface.NORMAL);
+            chip.setBackground(strokedRect(
+                    Color.argb(72, 16, 30, 58),
+                    gradient[1],
+                    dp(16),
+                    dp(1)
+            ));
+        }
+    }
+
+    /**
+     * 「添加设备」弹窗：类型 chips + 名称 + 网址 + 扫码填入。
+     * 保存后立即连接，并让首页出现这台设备（像加了一个好友）。
+     */
+    private void showAddDeviceDialog() {
+        final String[] pickedKind = new String[]{normalizeDeviceKind(selectedDeviceKind)};
+
+        LinearLayout panel = appDialogPanel();
+        panel.addView(appDialogTitle(getString(R.string.add_device_title)));
+
+        TextView hint = appDialogHint(getString(R.string.add_device_subtitle));
+        LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        hintParams.setMargins(0, dp(8), 0, dp(16));
+        panel.addView(hint, hintParams);
+
+        LinearLayout chips = new LinearLayout(this);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        chips.setGravity(Gravity.CENTER_VERTICAL);
+        panel.addView(chips, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
+        List<TextView> chipViews = new ArrayList<>();
+        final TextView[] saveHolder = new TextView[1];
+        for (String kind : DEVICE_KINDS) {
+            TextView chip = new TextView(this);
+            chip.setText(deviceKindLabel(this, kind));
+            chip.setTextSize(12);
+            chip.setGravity(Gravity.CENTER);
+            chip.setPadding(dp(8), dp(9), dp(8), dp(9));
+            LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+            );
+            chipParams.setMargins(dp(3), 0, dp(3), 0);
+            chip.setOnClickListener(view -> {
+                pickedKind[0] = kind;
+                for (int index = 0; index < chipViews.size(); index++) {
+                    styleKindChip(
+                            chipViews.get(index),
+                            DEVICE_KINDS[index],
+                            DEVICE_KINDS[index].equals(kind)
+                    );
+                }
+                if (saveHolder[0] != null) applyPrimaryButtonSkin(saveHolder[0], kind);
+            });
+            chipViews.add(chip);
+            chips.addView(chip, chipParams);
+        }
+        for (int index = 0; index < chipViews.size(); index++) {
+            styleKindChip(
+                    chipViews.get(index),
+                    DEVICE_KINDS[index],
+                    DEVICE_KINDS[index].equals(pickedKind[0])
+            );
+        }
+
+        EditText nameInput = appDialogInput(getString(R.string.add_device_name_hint), "", false);
+        LinearLayout.LayoutParams nameParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        nameParams.setMargins(0, dp(16), 0, 0);
+        panel.addView(nameInput, nameParams);
+
+        EditText urlInput = appDialogInput(getString(R.string.add_device_url_hint), "", true);
+        LinearLayout.LayoutParams urlParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        urlParams.setMargins(0, dp(10), 0, 0);
+        panel.addView(urlInput, urlParams);
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams buttonsParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        buttonsParams.setMargins(0, dp(16), 0, 0);
+        panel.addView(buttons, buttonsParams);
+
+        Dialog dialog = showAppDialog(panel, 360);
+
+        TextView scanButton = appDialogSecondaryButton(
+                getString(R.string.add_device_scan),
+                view -> {
+                    pendingAddDeviceUrlInput = urlInput;
+                    startQrScan();
+                }
+        );
+        LinearLayout.LayoutParams scanParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        scanParams.setMargins(0, dp(10), 0, 0);
+        panel.addView(scanButton, scanParams);
+
+        TextView cancel = appDialogSecondaryButton(
+                getString(R.string.add_device_cancel),
+                view -> dialog.dismiss()
+        );
+        LinearLayout.LayoutParams cancelParams = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
+        cancelParams.setMargins(0, 0, dp(5), 0);
+        buttons.addView(cancel, cancelParams);
+
+        TextView save = appDialogPrimaryButton(
+                getString(R.string.add_device_save),
+                pickedKind[0],
+                view -> {
+                    String url = normalizeUrl(urlInput.getText().toString());
+                    if (url.isEmpty()) {
+                        Toast.makeText(this, R.string.add_device_need_url, Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    String name = nameInput.getText().toString().trim();
+                    selectedDeviceKind = pickedKind[0];
+                    saveSuccessfulConnection(url, pickedKind[0]);
+                    if (!name.isEmpty()) renameDevice(url, name);
+                    updateDeviceKindPickerLabel();
+                    refreshWelcomeDevices();
+                    dialog.dismiss();
+                    loadUrl(url);
+                }
+        );
+        saveHolder[0] = save;
+        LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
+        saveParams.setMargins(dp(5), 0, 0, 0);
+        buttons.addView(save, saveParams);
+    }
+
+    /** 给已保存的设备改名（按 URL 匹配）。 */
+    private void renameDevice(String url, String name) {
+        List<SavedConnection> connections = readSavedConnections();
+        for (SavedConnection connection : connections) {
+            if (sameConnectionUrl(connection.url, url)) {
+                connection.name = name;
+                writeSavedConnections(connections);
+                return;
             }
         }
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.device_kind_pick)
-                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
-                    selectedDeviceKind = DEVICE_KINDS[which];
-                    updateDeviceKindPickerLabel();
-                    dialog.dismiss();
-                })
-                .show();
     }
 
     private void updateDeviceKindPickerLabel() {
@@ -4950,7 +5514,10 @@ public class MainActivity extends Activity {
         ));
         badge.setClickable(true);
         badge.setContentDescription(getString(R.string.device_change_kind));
-        badge.setOnClickListener(view -> showConnectionKindPicker(connection, connections, badge));
+        badge.setOnClickListener(view -> {
+            dialog.dismiss();
+            showDeviceKindEditor(connection);
+        });
         row.addView(badge, new LinearLayout.LayoutParams(dp(46), dp(34)));
 
         LinearLayout copy = new LinearLayout(this);
@@ -5036,7 +5603,10 @@ public class MainActivity extends Activity {
 
         ImageView delete = actionIconButton(R.drawable.ic_welcome_delete, true);
         delete.setContentDescription(getString(R.string.delete));
-        delete.setOnClickListener(view -> confirmDeleteConnection(dialog, connection, connections));
+        delete.setOnClickListener(view -> {
+            dialog.dismiss();
+            confirmDeleteDevice(connection);
+        });
         LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(34), dp(34));
         deleteParams.setMargins(dp(8), 0, 0, 0);
         row.addView(delete, deleteParams);
@@ -5059,109 +5629,6 @@ public class MainActivity extends Activity {
     }
 
     /** Lets the user re-assign a saved device's family (local WebUI / zcode / dsh / …). */
-    private void showConnectionKindPicker(
-            SavedConnection connection,
-            List<SavedConnection> connections,
-            TextView badge
-    ) {
-        if (connection == null) return;
-        String[] labels = new String[DEVICE_KINDS.length];
-        int checked = 0;
-        for (int index = 0; index < DEVICE_KINDS.length; index++) {
-            labels[index] = deviceKindLabel(this, DEVICE_KINDS[index]);
-            if (DEVICE_KINDS[index].equals(normalizeDeviceKind(connection.kind))) {
-                checked = index;
-            }
-        }
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.device_change_kind)
-                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
-                    connection.kind = DEVICE_KINDS[which];
-                    writeSavedConnections(connections);
-                    if (badge != null) {
-                        int accent = deviceKindAccent(connection.kind);
-                        badge.setText(deviceKindBadge(connection.kind));
-                        badge.setTextColor(accent);
-                        badge.setBackground(strokedRect(
-                                Color.argb(
-                                        60,
-                                        Color.red(accent),
-                                        Color.green(accent),
-                                        Color.blue(accent)
-                                ),
-                                accent,
-                                dp(11),
-                                dp(1)
-                        ));
-                    }
-                    if (sameConnectionUrl(
-                            connection.url,
-                            preferences.getString(KEY_CURRENT_DEVICE_URL, "")
-                    )) {
-                        preferences.edit()
-                                .putString(
-                                        KEY_CURRENT_DEVICE_KIND,
-                                        normalizeDeviceKind(connection.kind)
-                                )
-                                .apply();
-                    }
-                    refreshWelcomeDevices();
-                    dialog.dismiss();
-                })
-                .show();
-    }
-
-    private void showRenameConnectionDialog(
-            Dialog parentDialog,
-            SavedConnection connection,
-            List<SavedConnection> connections
-    ) {
-        EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setText(connection.name);
-        input.setHint(R.string.saved_connection_name_hint);
-        input.setSelectAllOnFocus(true);
-        input.setPadding(dp(14), 0, dp(14), 0);
-
-        AlertDialog renameDialog = new AlertDialog.Builder(this)
-                .setTitle(R.string.saved_connection_edit)
-                .setView(input)
-                .setNegativeButton(R.string.cancel, null)
-                .setPositiveButton(R.string.save, null)
-                .create();
-        renameDialog.setOnShowListener(ignored -> {
-            renameDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
-                connection.name = input.getText().toString().trim();
-                writeSavedConnections(connections);
-                renameDialog.dismiss();
-                parentDialog.dismiss();
-                showSavedConnectionsDialog();
-            });
-            input.requestFocus();
-            renameDialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
-        });
-        renameDialog.show();
-    }
-
-    private void confirmDeleteConnection(
-            Dialog parentDialog,
-            SavedConnection connection,
-            List<SavedConnection> connections
-    ) {
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.saved_connection_delete_title)
-                .setMessage(R.string.saved_connection_delete_message)
-                .setNegativeButton(R.string.cancel, null)
-                .setPositiveButton(R.string.delete, (dialog, which) -> {
-                    connections.remove(connection);
-                    writeSavedConnections(connections);
-                    parentDialog.dismiss();
-                    Toast.makeText(this, R.string.saved_connection_deleted, Toast.LENGTH_SHORT).show();
-                    showSavedConnectionsDialog();
-                })
-                .show();
-    }
-
     private void loadUrlFromWelcome() {
         loadUrl(welcomeUrlInput.getText().toString());
     }
@@ -5201,6 +5668,13 @@ public class MainActivity extends Activity {
         String url = extractUrlFromScan(text);
         if (url.isEmpty()) {
             Toast.makeText(this, R.string.scan_invalid, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // 从「添加设备」弹窗发起的扫码：只填入输入框，由用户确认后再保存。
+        if (pendingAddDeviceUrlInput != null) {
+            pendingAddDeviceUrlInput.setText(url);
+            pendingAddDeviceUrlInput.setSelection(pendingAddDeviceUrlInput.getText().length());
+            pendingAddDeviceUrlInput = null;
             return;
         }
         welcomeUrlInput.setText(url);
