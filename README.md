@@ -7,8 +7,8 @@
 当前版本：
 
 - 应用名：`AI mini`
-- versionName：`1.0.0`
-- versionCode：`1`
+- versionName：`1.0.1`
+- versionCode：`2`
 - 仓库：<https://github.com/3354282339/AI-mini>
 - 下载安装包：<https://github.com/3354282339/AI-mini/releases/latest>
 - applicationId：`app.aimini`（与旧版 `app.gptmini.webview`、Gecko 版 `app.gptmini` 互不冲突，可同时安装）
@@ -35,8 +35,8 @@ chmod +x scripts/build-debug.sh
 APK 输出：
 
 ```text
-app/build/outputs/apk/debug/AI mini-1.0.0-debug.apk
-app/build/outputs/apk/release/AI mini-1.0.0-release.apk
+app/build/outputs/apk/debug/AI mini-1.0.1-debug.apk
+app/build/outputs/apk/release/AI mini-1.0.1-release.apk
 ```
 
 ## 签名

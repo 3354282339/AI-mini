@@ -30,6 +30,8 @@
     <string name="device_manage">设备管理</string>
     <string name="device_delete_title">删除设备</string>
     <string name="device_filter_all">全部</string>
+    <string name="link_open_title">链接用外部浏览器打开</string>
+    <string name="link_open_subtitle">关闭（默认）：网页里的链接在 App 内打开；开启：交给系统浏览器打开</string>
     <string name="url_hint">输入 AI mini 网址</string>
     <string name="url_example">http://电脑IP:8787/?token=...</string>
     <string name="open_url">打开</string>

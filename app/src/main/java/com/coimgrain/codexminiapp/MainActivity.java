@@ -169,6 +169,10 @@ public class MainActivity extends Activity {
     static final String NOTIFICATION_MODE_PERSISTENT = "persistent";
     private static final String KEY_FLOAT_MENU_THEME = "float_menu_theme";
     private static final String KEY_NATIVE_LIQUID_GLASS = "native_liquid_glass";
+    /** 点击网页里的链接时：App 内打开（默认）还是交给系统浏览器。 */
+    private static final String KEY_LINK_OPEN_MODE = "link_open_mode";
+    static final String LINK_OPEN_MODE_INTERNAL = "internal";
+    static final String LINK_OPEN_MODE_EXTERNAL = "external";
     private static final String GITHUB_LATEST_RELEASE_API =
             "https://api.github.com/repos/3354282339/AI-mini/releases?per_page=20";
     private static final String GITHUB_REPOSITORY_URL =
@@ -1339,6 +1343,22 @@ public class MainActivity extends Activity {
         );
         glassParams.setMargins(0, dp(10), 0, 0);
         floatSettingsPanel.addView(glassRow, glassParams);
+
+        // 链接打开方式：关 = 在 App 内打开（默认），开 = 用系统浏览器打开。
+        LinearLayout linkRow = createSettingsSwitchRow(
+                getString(R.string.link_open_title),
+                getString(R.string.link_open_subtitle),
+                LINK_OPEN_MODE_EXTERNAL.equals(linkOpenMode()),
+                enabled -> switchLinkOpenMode(
+                        enabled ? LINK_OPEN_MODE_EXTERNAL : LINK_OPEN_MODE_INTERNAL
+                )
+        );
+        LinearLayout.LayoutParams linkParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        linkParams.setMargins(0, dp(10), 0, 0);
+        floatSettingsPanel.addView(linkRow, linkParams);
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -2679,6 +2699,8 @@ public class MainActivity extends Activity {
      */
     private void applyPageTopInsetToWeb() {
         if (webView == null) return;
+        // 双保险：这个注入会改 html/body 的 padding 与 class，只允许作用在 GPT 页面上。
+        if (!isGptDevice()) return;
         int statusPx = Math.max(0, currentStatusBarTopPx());
         int totalPx = resolvedPageTopInsetPx();
         // 不再强制叠加系统状态栏高度，否则不同设备上的 0 档会被自动推到
@@ -5299,11 +5321,89 @@ public class MainActivity extends Activity {
             browserFrame.setClipToPadding(false);
         }
         browserFrame.setBackgroundColor(needsInset
-                ? Color.rgb(11, 18, 32)
+                ? deviceTopInsetColor(normalizeDeviceKind(selectedDeviceKind))
                 : WEB_CONTENT_BACKGROUND_COLOR);
     }
 
-    /** 状态栏高度（优先取真实 insets，取不到时回退系统资源）。 */
+    /**
+     * 非 GPT 设备顶部安全区的填充色，取各自产品的深色主题色，避免出现一条对不上的色带：
+     * zcode 的 theme-color 与启动底色是 #161616，dsh 的启动底色是 #151517（均为实测值）。
+     */
+    private int deviceTopInsetColor(String kind) {
+        if (DEVICE_KIND_ZCODE.equals(kind)) return Color.rgb(22, 22, 22);
+        if (DEVICE_KIND_DSH.equals(kind)) return Color.rgb(21, 21, 23);
+        return Color.rgb(11, 18, 32);
+    }
+
+    /**
+     * dsh 这类设备靠 URL 里的 token 换取认证 cookie。若用户手输了不带 token 的地址，
+     * 或者历史记录里留下的是重定向后的地址，这里用同一主机上保存过的带 token 地址补回，
+     * 避免"打开就 401"。
+     */
+    private String restoreAuthParamsIfNeeded(String url) {
+        if (preferences == null || url == null || url.trim().isEmpty()) return url;
+        if (url.contains("token=")) return url;
+        String saved = preferences.getString(KEY_CURRENT_DEVICE_URL, "");
+        if (saved == null || saved.trim().isEmpty() || !saved.contains("token=")) return url;
+        try {
+            Uri savedUri = Uri.parse(saved.trim());
+            Uri target = Uri.parse(url.trim());
+            String savedHost = savedUri.getHost();
+            if (savedHost == null || !savedHost.equalsIgnoreCase(target.getHost())) return url;
+            String token = savedUri.getQueryParameter("token");
+            if (token == null || token.trim().isEmpty()) return url;
+            return target.buildUpon().appendQueryParameter("token", token).build().toString();
+        } catch (Exception ignored) {
+            return url;
+        }
+    }
+
+    /** 链接打开方式（默认 App 内打开）。 */
+    private String linkOpenMode() {
+        if (preferences == null) return LINK_OPEN_MODE_INTERNAL;
+        String mode = preferences.getString(KEY_LINK_OPEN_MODE, LINK_OPEN_MODE_INTERNAL);
+        return LINK_OPEN_MODE_EXTERNAL.equals(mode)
+                ? LINK_OPEN_MODE_EXTERNAL
+                : LINK_OPEN_MODE_INTERNAL;
+    }
+
+    private void switchLinkOpenMode(String mode) {
+        if (preferences == null) return;
+        preferences.edit()
+                .putString(
+                        KEY_LINK_OPEN_MODE,
+                        LINK_OPEN_MODE_EXTERNAL.equals(mode)
+                                ? LINK_OPEN_MODE_EXTERNAL
+                                : LINK_OPEN_MODE_INTERNAL
+                )
+                .apply();
+    }
+
+    /**
+     * 当前是否在 GPT（本地 WebUI）设备上。GPT 专用注入（液态玻璃、字体、键盘 shift、
+     * 顶部 inset 变量、本地路由探测、会话字体缩放）都以它为唯一开关。
+     */
+    private boolean isGptDevice() {
+        if (preferences == null) return true;
+        return DEVICE_KIND_MINIAPP.equals(normalizeDeviceKind(
+                preferences.getString(KEY_CURRENT_DEVICE_KIND, DEVICE_KIND_MINIAPP)
+        ));
+    }
+
+    /**
+     * 把 WebView 的 cookie 立即写入磁盘。Android 只在内存里维护 cookie，
+     * 进程被系统回收时不 flush 就会丢 —— dsh 的认证 cookie（HttpOnly、30 天）尤其依赖它。
+     */
+    private void flushWebCookies() {
+        try {
+            CookieManager.getInstance().flush();
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * 状态栏高度（优先取真实 insets，取不到时回退系统资源）。
+     */
     private int statusBarHeightPx() {
         try {
             WindowInsets insets = getWindow() == null
@@ -6542,7 +6642,7 @@ public class MainActivity extends Activity {
     }
 
     private void loadUrl(String rawUrl) {
-        String url = normalizeUrl(rawUrl);
+        String url = restoreAuthParamsIfNeeded(normalizeUrl(rawUrl));
         if (url.isEmpty()) {
             Toast.makeText(this, R.string.enter_url_first, Toast.LENGTH_SHORT).show();
             if (welcomeView.getVisibility() == View.VISIBLE) {
@@ -8977,6 +9077,9 @@ public class MainActivity extends Activity {
         activityBackgroundedAtElapsed = SystemClock.elapsedRealtime();
         browserHealthCheckGeneration++;
         persistDownloads();
+        // 进入后台就把 cookie 落盘：dsh 的认证 cookie 是 HttpOnly 持久 cookie，
+        // 若进程随后被系统回收而未 flush，下次打开就会 401。
+        flushWebCookies();
         // Native Service polling owns task completion in the background. Suspending
         // Gecko timers are not used for completion, while leaving the visible
         // compositor active avoids a white TextureView surface in the task snapshot
@@ -9548,6 +9651,18 @@ public class MainActivity extends Activity {
                     }
                 }
                 if (isHttpScheme(scheme)) {
+                    // 用户手动点击的链接：按设置决定留在 App 内还是交给系统浏览器。
+                    // 只对"用户手势"触发的导航生效 —— 页面自身的重定向/导航不受影响，
+                    // 否则会把 WebUI 本身丢到外部去。
+                    if (hasUserGesture
+                            && LINK_OPEN_MODE_EXTERNAL.equals(linkOpenMode())) {
+                        Log.d(
+                                NAVIGATION_LOG_TAG,
+                                "user link -> external url=" + navigationUrlForLog(candidate)
+                        );
+                        openExternalPage(candidate);
+                        return true;
+                    }
                     if (hasDeviceProfileSelection(uri)) {
                         availableLocalApiBase = null;
                         handler.removeCallbacks(localRouteRetryer);
@@ -9638,25 +9753,40 @@ public class MainActivity extends Activity {
                     return;
                 }
                 pendingConnectionUrl = null;
-                injectMobileFixes();
-                adaptPlainTextPageForMobile();
-                applyPageTopInsetToWeb();
-                applyConversationFontScale(view);
-                boolean nativeRouteAllowed = !hasDeviceProfileSelection(Uri.parse(url == null ? "" : url));
-                if (nativeRouteAllowed
-                        && availableLocalApiBase != null
-                        && !availableLocalApiBase.isEmpty()) {
-                    applyLocalRouteToPage(availableLocalApiBase, 0);
-                } else if (nativeRouteAllowed) {
-                    scheduleLocalRouteCheck(350);
+                // GPT 专用注入只对本地 WebUI 生效：injectMobileFixes 会改 GPT 的
+                // composer/液态玻璃/键盘逻辑，applyPageTopInsetToWeb 会给 html/body 设
+                // padding 与一堆 CSS 变量。它们作用到 dsh / zcode 上会改造对方界面、
+                // 并与原生安全区留白叠加（曾出现"顶部给太多"）。
+                boolean gptDevice = isGptDevice();
+                if (gptDevice) {
+                    injectMobileFixes();
+                    applyPageTopInsetToWeb();
+                    applyConversationFontScale(view);
                 }
+                adaptPlainTextPageForMobile();
                 applyBrowserViewport(view, mainDesktopMode);
                 showPersistentConnectedNotificationIfNeeded();
-                requestImmediateTaskStatusRefresh(view);
-                handler.postDelayed(
-                        () -> requestImmediateTaskStatusRefresh(view),
-                        850
-                );
+                if (gptDevice) {
+                    boolean nativeRouteAllowed = !hasDeviceProfileSelection(
+                            Uri.parse(url == null ? "" : url)
+                    );
+                    if (nativeRouteAllowed
+                            && availableLocalApiBase != null
+                            && !availableLocalApiBase.isEmpty()) {
+                        applyLocalRouteToPage(availableLocalApiBase, 0);
+                    } else if (nativeRouteAllowed) {
+                        scheduleLocalRouteCheck(350);
+                    }
+                    requestImmediateTaskStatusRefresh(view);
+                    handler.postDelayed(
+                            () -> requestImmediateTaskStatusRefresh(view),
+                            850
+                    );
+                }
+                // 认证 cookie 立即落盘：dsh 首次访问靠 303 + Set-Cookie 下发一个 30 天的
+                // HttpOnly cookie，不 flush 的话进程被系统回收后 cookie 丢失，再次打开
+                // 就会 401（表现为卡在认证页）。
+                flushWebCookies();
                 handler.postDelayed(MainActivity.this::revealLoadedMainPage, 180);
             }
 
