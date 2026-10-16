@@ -446,10 +446,36 @@ AI mini 从"只能连一种 WebUI"扩展为"多设备容器"：**一个网址 = 
 
 阈值都写在文件顶部常量里（`LONG_REQUEST_MS` / `WS_BURST` / `WS_WINDOW_MS` / `IDLE_DONE_MS`），真机误报时优先调这几个值。
 
-### 7.3 待办（需要更多信息才能做精确适配）
+### 7.3 各产品的实测结论（本轮核实）
 
-1. **zcode**：需要完整下载并解析 `assets/index-*.js`（>6 MB，本轮下载被截断），找出它的消息/状态通道（WebSocket 或长轮询），才能拿到精确的"生成中/完成"事件。
-2. **dsh**：需要 `/api/remote.mux` 的握手细节与事件名清单（`packages/api/gateway` 里继续挖），或者一个有效的实例链接 —— 本轮用用户提供的地址访问返回 `401 dsh web authentication required`，token 已失效。
-3. **页面显示适配**：目前只有通用的 viewport 修补。dsh / zcode 的窄屏布局、输入框键盘行为需要各自的 CSS 注入，前提是能看到真实页面 DOM。
+| 产品 | 状态通道 | 我们的接入方式 |
+| --- | --- | --- |
+| 本地 WebUI | HTTP 轮询 `/codex/status`、`/codex/threads`（**无 SSE/WebSocket**，已核实 `server.js` 路由） | 服务端轮询 + `page.js` 前台 hook（精确） |
+| dsh | WebSocket `/api/remote.mux`，JSON 文本帧 `{type:'emit',event,args}`；事件 `api-session/status` 的 `args[1]` 就是"该会话是否在跑"（已核实 `packages/client/ui-session/src/client/index.ts` 的 `$on('api-session/status', (sessionId, running) => …)`） | **精确**：`webui-watch.js` 解析该事件直接判定 running/complete |
+| zcode | 二进制 RPC（bundle 内 `ChannelClient` / `protocol.send(buffer)` / `onBuffer` 编解码，形似 vscode-jsonrpc 的二进制变体），bundle 里没有 `new WebSocket(` 或 `/api/...` 明文端点 | **兜底**：DOM「停止」按钮 + 长请求 + WS 突发三条启发式 |
+
+zcode 的协议要在注入脚本里复刻编解码不划算，所以维持兜底方案；它同样是 React SPA，DOM 里存在"停止/中断"按钮，DOM 判据通常就能命中。
+
+顺带确认：**dsh 前端是响应式设计**（`@container (max-width: 560px)`、`--dsh-composer-card-max-width: min(calc(100% - 16px), 952px)`），手机上不需要额外布局修补；zcode 的 UI 本身自带"流光"组件（bundle 里的 `--beam-strength`、`hueRange`、`colorVariant: 'colorful'|'mono'`），与我们在设备卡片上给的"黑白流光"配色一致。
+
+### 7.4 真机调试入口
+
+页面里注入了探针函数，可用 WebView 调试或在代码里 `evaluateJavascript` 读取：
+
+```js
+window.__AIMiniWebUiWatchProbe()
+// { deviceKind:'dsh', running:true, precise:true, domBusy:false, active:0, idleMs:312 }
+```
+
+- `precise:true` 表示已收到产品精确帧（dsh 的 `api-session/status`），此时启发式已关闭
+- `precise:false` 时看 `domBusy` / `active` / `idleMs` 判断当前走的是哪条启发式
+- 阈值在 `webui-watch.js` 顶部：`LONG_REQUEST_MS` / `WS_BURST` / `WS_WINDOW_MS` / `IDLE_DONE_MS`
+
+### 7.5 仍需真机反馈的部分
+
+1. dsh / zcode 里跑一次任务，确认完成通知是否准时、有无误报（`precise` 是否变 true）。
+2. 两个页面在手机上的实际观感（横向溢出、输入框被键盘遮挡、按钮热区）。
+3. zcode 若要精确通知，需要抓一次它二进制 RPC 的实际帧（真机 + WebView 调试），或者退一步用它的 DOM 状态文本。
+
 
 
