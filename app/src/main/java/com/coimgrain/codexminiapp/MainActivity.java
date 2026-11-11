@@ -101,6 +101,7 @@ import java.util.HashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -116,6 +117,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import androidx.core.content.FileProvider;
+import androidx.webkit.ProfileStore;
+import androidx.webkit.WebViewFeature;
 
 public class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST = 1001;
@@ -259,6 +262,8 @@ public class MainActivity extends Activity {
     private FrameLayout browserFrame;
     private AIMiniBrowserEngine browserEngine;
     private AIMiniBrowserView webView;
+    /** 主 WebView 当前绑定的设备隔离 profile 名。 */
+    private String currentMainProfile = "";
     private FrameLayout externalBrowserContainer;
     private AIMiniBrowserView externalWebView;
     private View externalCloseButton;
@@ -651,10 +656,14 @@ public class MainActivity extends Activity {
     }
 
     private void buildWelcomeView(FrameLayout host) {
-        ScrollView scrollView = new NoScrollView(this);
+        // 设备多了以后首页必然超出一屏，必须是可滚动的真实 ScrollView。
+        // 之前用的是 NoScrollView（一个故意屏蔽触摸/滚动的子类），设备一多就滚不动。
+        ScrollView scrollView = new ScrollView(this);
         scrollView.setFillViewport(true);
         scrollView.setBackground(welcomeBackground());
         scrollView.setClipToPadding(false);
+        scrollView.setVerticalScrollBarEnabled(false);
+        scrollView.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         welcomeView = scrollView;
         host.addView(scrollView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -860,7 +869,16 @@ public class MainActivity extends Activity {
                 1f
         ));
 
-        webView = new AIMiniBrowserView(this, browserEngine);
+        // 首次创建就直接绑定上次使用的设备 profile，避免启动后立刻重建一次 WebView。
+        String initialUrl = preferences == null
+                ? ""
+                : preferences.getString(KEY_CURRENT_DEVICE_URL,
+                        preferences.getString(KEY_LAST_URL, ""));
+        String initialProfile = initialUrl == null || initialUrl.trim().isEmpty()
+                ? ""
+                : deviceProfileName(initialUrl);
+        webView = new AIMiniBrowserView(this, browserEngine, initialProfile);
+        currentMainProfile = webView.profileName();
         browserFrame.addView(webView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
@@ -4705,7 +4723,7 @@ public class MainActivity extends Activity {
                 }
         ));
         panel.addView(appDialogActionRow(
-                getString(R.string.device_rename),
+                getString(R.string.device_edit_action),
                 view -> {
                     dialog.dismiss();
                     showRenameDeviceDialog(connection);
@@ -4753,10 +4771,20 @@ public class MainActivity extends Activity {
     /** 重命名设备（App 风格弹窗）。 */
     private void showRenameDeviceDialog(SavedConnection connection) {
         if (connection == null) return;
-        LinearLayout panel = appDialogPanel();
-        panel.addView(appDialogTitle(getString(R.string.device_rename)));
+        final String originalUrl = connection.url;
+        final String originalId = connection.id;
 
-        EditText input = appDialogInput(
+        LinearLayout panel = appDialogPanel();
+        panel.addView(appDialogTitle(getString(R.string.device_edit_title)));
+        TextView hint = appDialogHint(getString(R.string.device_edit_subtitle));
+        LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        hintParams.setMargins(0, dp(8), 0, dp(4));
+        panel.addView(hint, hintParams);
+
+        EditText nameInput = appDialogInput(
                 getString(R.string.saved_connection_name_hint),
                 connection.name == null || connection.name.trim().isEmpty()
                         ? connection.displayName(this)
@@ -4768,7 +4796,20 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
         inputParams.setMargins(0, dp(14), 0, 0);
-        panel.addView(input, inputParams);
+        panel.addView(nameInput, inputParams);
+
+        // 网址可编辑：换电脑、换 token 时不必删掉设备重建。
+        EditText urlInput = appDialogInput(
+                getString(R.string.add_device_url_hint),
+                connection.url,
+                true
+        );
+        LinearLayout.LayoutParams urlParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        urlParams.setMargins(0, dp(10), 0, 0);
+        panel.addView(urlInput, urlParams);
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
@@ -4779,7 +4820,7 @@ public class MainActivity extends Activity {
         buttonsParams.setMargins(0, dp(16), 0, 0);
         panel.addView(buttons, buttonsParams);
 
-        Dialog dialog = showAppDialog(panel, 340);
+        Dialog dialog = showAppDialog(panel, 360);
 
         TextView cancel = appDialogSecondaryButton(
                 getString(R.string.add_device_cancel),
@@ -4797,11 +4838,48 @@ public class MainActivity extends Activity {
                 getString(R.string.add_device_save),
                 connection.kind,
                 view -> {
-                    connection.name = input.getText().toString().trim();
-                    writeSavedConnections(readSavedConnectionsWith(connection));
+                    String newUrl = normalizeUrl(urlInput.getText().toString());
+                    if (newUrl.isEmpty()) {
+                        Toast.makeText(this, R.string.add_device_need_url, Toast.LENGTH_SHORT)
+                                .show();
+                        return;
+                    }
+                    connection.name = nameInput.getText().toString().trim();
+                    connection.url = newUrl;
+                    // id 保持不变：改链接不该让用户重新登录（隔离 profile 挂在 id 上）。
+                    connection.id = originalId;
+                    List<SavedConnection> updated = new ArrayList<>();
+                    for (SavedConnection item : readSavedConnections()) {
+                        if (sameConnectionUrl(item.url, originalUrl)) {
+                            updated.add(connection);
+                        } else {
+                            updated.add(item);
+                        }
+                    }
+                    writeSavedConnections(updated);
+                    // 改的是当前设备：同步当前地址，下次进入直接用新链接。
+                    if (sameConnectionUrl(
+                            originalUrl,
+                            preferences.getString(KEY_CURRENT_DEVICE_URL, "")
+                    )) {
+                        preferences.edit()
+                                .putString(KEY_CURRENT_DEVICE_URL, newUrl)
+                                .apply();
+                    }
+                    if (sameConnectionUrl(
+                            originalUrl,
+                            preferences.getString(KEY_LAST_URL, "")
+                    )) {
+                        preferences.edit().putString(KEY_LAST_URL, newUrl).apply();
+                    }
                     refreshWelcomeDevices();
                     refreshMiniMenuDeviceSubtitle();
                     dialog.dismiss();
+                    Toast.makeText(
+                            this,
+                            R.string.device_edit_saved,
+                            Toast.LENGTH_SHORT
+                    ).show();
                 }
         );
         LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
@@ -4981,6 +5059,8 @@ public class MainActivity extends Activity {
                         remaining.add(item);
                     }
                     writeSavedConnections(remaining);
+                    // 一并清掉这台设备的隔离存储，避免删掉后仍占磁盘。
+                    deleteDeviceProfile(connection.url);
                     refreshWelcomeDevices();
                     refreshMiniMenuDeviceSubtitle();
                     dialog.dismiss();
@@ -5437,6 +5517,8 @@ public class MainActivity extends Activity {
      */
     private void flushWebCookies() {
         try {
+            // 主 WebView 可能绑定了设备隔离 profile，必须 flush 它自己的 cookie 存储。
+            if (webView != null) webView.flushCookies();
             CookieManager.getInstance().flush();
         } catch (Exception ignored) {
         }
@@ -5536,6 +5618,7 @@ public class MainActivity extends Activity {
                         url,
                         item.optString("name", "").trim(),
                         kind,
+                        item.optString("id", "").trim(),
                         item.optLong("lastUsedAt", 0L)
                 ));
             }
@@ -5552,6 +5635,7 @@ public class MainActivity extends Activity {
                 item.put("url", connection.url);
                 item.put("name", connection.name);
                 item.put("kind", normalizeDeviceKind(connection.kind));
+                item.put("id", connection.id);
                 item.put("lastUsedAt", connection.lastUsedAt);
                 array.put(item);
             } catch (Exception ignored) {
@@ -6698,6 +6782,10 @@ public class MainActivity extends Activity {
         pendingConnectionUrl = url;
         preferences.edit().putString(KEY_LAST_URL, url).apply();
         markCurrentDevice(url);
+        // 设备隔离：每台设备一个独立 WebView profile（cookie / localStorage / IndexedDB /
+        // 缓存互不可见）。切换设备时重建主 WebView，保证上一个设备的登录态不会带到
+        // 新设备上（zcode 多台设备共用同一域名，只能靠 profile 隔离）。
+        ensureMainBrowserForDevice(url);
         boolean revealingFromWelcome = prepareMainPageReveal();
         if (!revealingFromWelcome) showApp();
         urlInput.setText(url);
@@ -6708,6 +6796,129 @@ public class MainActivity extends Activity {
         webView.loadUrl(url);
         showPersistentConnectedNotificationIfNeeded();
         tryUpgradeToLocalRoute(url);
+    }
+
+    /**
+     * 设备隔离：算出某台设备对应的 WebView profile 名。
+     *
+     * <p>按设备稳定 id（不是 URL）生成，所以改链接/换 token 不会丢登录态；
+     * 不同设备得到不同名字。名字里排除 `thread` 这类会话级参数。</p>
+     */
+    private String deviceProfileName(String url) {
+        String identity = deviceIdFor(url);
+        if (identity.isEmpty()) identity = canonicalConnectionUrl(stripVolatileParams(url));
+        if (identity.isEmpty()) identity = "default";
+        try {
+            java.security.MessageDigest digest =
+                    java.security.MessageDigest.getInstance("SHA-1");
+            byte[] hash = digest.digest(identity.getBytes(StandardCharsets.UTF_8));
+            StringBuilder builder = new StringBuilder("aimini-");
+            for (int index = 0; index < 10 && index < hash.length; index++) {
+                builder.append(String.format(Locale.US, "%02x", hash[index]));
+            }
+            return builder.toString();
+        } catch (Exception error) {
+            return "aimini-" + Integer.toHexString(identity.hashCode());
+        }
+    }
+
+    /** 系统 WebView 是否支持多 profile（决定设备隔离是否可用）。 */
+    private boolean profileIsolationSupported() {
+        try {
+            return WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE);
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /** 由 URL 反查设备的稳定 id（找不到返回空）。 */
+    private String deviceIdFor(String url) {
+        if (preferences == null || url == null || url.trim().isEmpty()) return "";
+        String canonical = canonicalConnectionUrl(stripVolatileParams(url));
+        if (canonical.isEmpty()) return "";
+        for (SavedConnection connection : readSavedConnections()) {
+            if (canonical.equals(
+                    canonicalConnectionUrl(stripVolatileParams(connection.url))
+            )) {
+                return connection.id == null ? "" : connection.id.trim();
+            }
+        }
+        return "";
+    }
+
+    /** 去掉会话级易变参数，只保留标识"这台设备"的部分。 */
+    private String stripVolatileParams(String rawUrl) {
+        if (rawUrl == null || rawUrl.trim().isEmpty()) return "";
+        try {
+            Uri source = Uri.parse(rawUrl.trim());
+            if (!isHttpScheme(source.getScheme())) return rawUrl.trim();
+            Uri.Builder builder = source.buildUpon().clearQuery();
+            for (String name : source.getQueryParameterNames()) {
+                if ("thread".equals(name)) continue;
+                for (String value : source.getQueryParameters(name)) {
+                    builder.appendQueryParameter(name, value);
+                }
+            }
+            return builder.build().toString();
+        } catch (Exception ignored) {
+            return rawUrl.trim();
+        }
+    }
+
+    /**
+     * 确保主 WebView 绑定的是目标设备的 profile。profile 只能在 WebView 创建时指定，
+     * 所以不同设备之间切换需要重建一次主 WebView。
+     *
+     * <p>只保留一个主 WebView 实例，切换即销毁旧的，避免后台堆积多个渲染进程。</p>
+     */
+    private void ensureMainBrowserForDevice(String url) {
+        if (browserFrame == null) return;
+        // 系统 WebView 不支持多 profile 时不做重建（重建也拿不到隔离，只是白费一次加载）。
+        if (!profileIsolationSupported()) {
+            currentMainProfile = webView == null ? "" : webView.profileName();
+            return;
+        }
+        String targetProfile = deviceProfileName(url);
+        if (webView != null && targetProfile.equals(webView.profileName())) {
+            currentMainProfile = targetProfile;
+            return;
+        }
+        if (webView != null) {
+            Log.i(
+                    NAVIGATION_LOG_TAG,
+                    "device switch -> new profile " + targetProfile
+                            + " (was " + webView.profileName() + ")"
+            );
+            browserFrame.removeView(webView);
+            webView.destroy();
+            webView = null;
+        }
+        webView = new AIMiniBrowserView(this, browserEngine, targetProfile);
+        currentMainProfile = webView.profileName();
+        browserFrame.addView(webView, 0, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        configureWebView();
+    }
+
+    /**
+     * 删除设备时一并清掉它的隔离数据（cookie / localStorage / 缓存），
+     * 避免删掉的设备继续占用磁盘。
+     */
+    private void deleteDeviceProfile(String url) {
+        if (url == null || url.trim().isEmpty()) return;
+        String profileName = deviceProfileName(url);
+        if (profileName.equals(currentMainProfile)) return; // 正在用，等切走再说
+        try {
+            if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) return;
+            ProfileStore store = ProfileStore.getInstance();
+            if (store.getProfile(profileName) == null) return;
+            boolean deleted = store.deleteProfile(profileName);
+            Log.i(NAVIGATION_LOG_TAG, "deleted device profile " + profileName + " = " + deleted);
+        } catch (Throwable error) {
+            Log.w(NAVIGATION_LOG_TAG, "failed to delete profile " + profileName, error);
+        }
     }
 
     private String reloadFallbackUrl(AIMiniBrowserView target) {
@@ -7946,6 +8157,15 @@ public class MainActivity extends Activity {
 
     private String cookiesForUrl(String url) {
         if (url == null || url.trim().isEmpty()) return "";
+        // 设备隔离后 cookie 存在各自的 profile 里，必须问当前主 WebView 的 CookieManager，
+        // 否则带鉴权的下载会 401。
+        try {
+            if (webView != null) {
+                String cookie = webView.cookieManager().getCookie(url);
+                if (cookie != null && !cookie.isEmpty()) return cookie;
+            }
+        } catch (Exception ignored) {
+        }
         try {
             String cookie = CookieManager.getInstance().getCookie(url);
             return cookie == null ? "" : cookie;
@@ -10562,6 +10782,11 @@ public class MainActivity extends Activity {
         String url;
         String name;
         String kind;
+        /**
+         * 设备稳定标识。URL 可以改（换链接、换 token），但 id 不变 —— 隔离 profile 与
+         * 通知身份都挂在 id 上，所以改链接不会让用户重新登录。
+         */
+        String id;
         long lastUsedAt;
 
         SavedConnection(String url, String name, long lastUsedAt) {
@@ -10569,10 +10794,35 @@ public class MainActivity extends Activity {
         }
 
         SavedConnection(String url, String name, String kind, long lastUsedAt) {
+            this(url, name, kind, "", lastUsedAt);
+        }
+
+        SavedConnection(String url, String name, String kind, String id, long lastUsedAt) {
             this.url = url;
             this.name = name;
             this.kind = normalizeDeviceKind(kind);
+            this.id = (id == null || id.trim().isEmpty())
+                    ? deriveDeviceId(url)
+                    : id.trim();
             this.lastUsedAt = lastUsedAt;
+        }
+
+        /** 由 URL 派生稳定 id（老数据没有 id 时使用，确定且可重复）。 */
+        static String deriveDeviceId(String url) {
+            String key = url == null ? "" : url.trim();
+            if (key.isEmpty()) return "device-0";
+            try {
+                java.security.MessageDigest digest =
+                        java.security.MessageDigest.getInstance("SHA-1");
+                byte[] hash = digest.digest(key.getBytes(StandardCharsets.UTF_8));
+                StringBuilder builder = new StringBuilder("dev-");
+                for (int index = 0; index < 8 && index < hash.length; index++) {
+                    builder.append(String.format(Locale.US, "%02x", hash[index]));
+                }
+                return builder.toString();
+            } catch (Exception error) {
+                return "dev-" + Integer.toHexString(key.hashCode());
+            }
         }
 
         String displayName(Context context) {
@@ -10584,24 +10834,6 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {
             }
             return context.getString(R.string.saved_connection_default);
-        }
-    }
-
-    private static final class NoScrollView extends ScrollView {
-        NoScrollView(Context context) {
-            super(context);
-            setVerticalScrollBarEnabled(false);
-            setOverScrollMode(View.OVER_SCROLL_NEVER);
-        }
-
-        @Override
-        public boolean onInterceptTouchEvent(MotionEvent event) {
-            return false;
-        }
-
-        @Override
-        public boolean onTouchEvent(MotionEvent event) {
-            return false;
         }
     }
 

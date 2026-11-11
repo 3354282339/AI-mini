@@ -510,7 +510,31 @@ set-cookie: dsh-auth-<随机串>=v1.<payload>.<sig>; Max-Age=2592000; Path=/; Ht
 
 「检查更新」读取 `https://api.github.com/repos/3354282339/AI-mini/releases`，取最新 release 的 `.apk` 资产（优先名字含 `webview`，否则任意 `.apk`，排除 `gecko`），与当前 `versionName` 比较后提示；自动检查静默失败，手动打开更新页会显示错误。
 
-### 7.8 真机调试入口
+### 7.8 设备存储隔离（1.0.3 起）
+
+多台设备可能指向同一个站点（例如三台电脑都是 `zcode.z.ai`），共用默认 profile 时 cookie /
+localStorage 会互相串台：在设备 A 登录后进设备 B，会被要求"退出 A 的账号"。
+
+现在**每台设备一个独立 WebView profile**：
+
+| 项 | 实现 |
+| --- | --- |
+| 隔离键 | `SavedConnection.id`（设备稳定 id，不是 URL）→ `deviceProfileName()` 生成 `aimini-<sha1前10字节>` |
+| 绑定方式 | `AIMiniBrowserView` 构造时 `WebViewCompat.setProfile(webView, profileName)`，必须在加载任何页面之前 |
+| 切换设备 | profile 只能在创建时指定，所以 `ensureMainBrowserForDevice()` 会销毁旧 WebView 并重建 —— **同时只存在一个主 WebView**，不堆积渲染进程 |
+| cookie 读写 | 必须用 `webView.cookieManager()`（profile 的），不能用 `CookieManager.getInstance()`（那是默认 profile）。下载、`flushCookies()` 都走前者 |
+| 删除设备 | `deleteDeviceProfile()` 调 `ProfileStore.deleteProfile()` 清掉该设备的 cookie / localStorage / 缓存 |
+| 不支持时 | `WebViewFeature.MULTI_PROFILE` 不支持则跳过重建，退回共用默认 profile（功能正常，只是没有隔离），日志会记一行 |
+
+**id 与 URL 解耦的好处**：`SavedConnection.id` 在设备创建时生成并持久化，之后改 URL / 换 token
+`id` 不变 —— 所以"编辑设备改链接"不会让用户重新登录（profile 挂在 id 上）。
+
+### 7.9 首页滚动
+
+首页设备列表用 `ScrollView`（`fillViewport`）。1.0.2 及更早用的是 `NoScrollView` —— 一个
+故意屏蔽 `onInterceptTouchEvent`/`onTouchEvent` 的子类，设备一多就滚不动，现已删除该内部类。
+
+### 7.10 真机调试入口
 页面里注入了探针函数，可用 WebView 调试或在代码里 `evaluateJavascript` 读取：
 
 ```js

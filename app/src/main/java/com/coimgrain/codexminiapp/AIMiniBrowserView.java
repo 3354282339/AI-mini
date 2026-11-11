@@ -139,8 +139,74 @@ final class AIMiniBrowserView extends FrameLayout {
     private Bitmap recoveryFrame;
     private boolean documentStartInstalled;
     private ValueCallback<Uri[]> pendingFilePathCallback;
+    /** 当前 WebView 绑定的隔离 profile 名（空 = 系统默认 profile）。 */
+    private String boundProfileName = "";
+
+    /**
+     * 给 WebView 绑定隔离 profile。系统 WebView 不支持多 profile 时静默退回默认 profile，
+     * 功能不受影响（只是没有隔离）。
+     *
+     * @return 实际生效的 profile 名（空字符串表示默认 profile）
+     */
+    private static String applyProfile(WebView view, String profileName) {
+        if (view == null || profileName == null || profileName.trim().isEmpty()) return "";
+        try {
+            if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+                Log.i(TAG, "multi-profile unsupported; using default profile");
+                return "";
+            }
+            WebViewCompat.setProfile(view, profileName.trim());
+            return profileName.trim();
+        } catch (Throwable error) {
+            Log.w(TAG, "failed to bind profile " + profileName, error);
+            return "";
+        }
+    }
+
+    /** 当前生效的隔离 profile 名（空表示默认 profile）。 */
+    String profileName() {
+        return boundProfileName;
+    }
+
+    /**
+     * 这个 WebView 实际使用的 CookieManager。绑定了隔离 profile 时必须用它，
+     * 否则读写的是默认 profile 的 cookie —— 下载、认证 cookie 落盘都会出错。
+     */
+    CookieManager cookieManager() {
+        if (!boundProfileName.isEmpty()) {
+            try {
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+                    androidx.webkit.Profile profile =
+                            androidx.webkit.ProfileStore.getInstance()
+                                    .getProfile(boundProfileName);
+                    if (profile != null) return profile.getCookieManager();
+                }
+            } catch (Throwable error) {
+                Log.d(TAG, "profile cookie manager unavailable");
+            }
+        }
+        return CookieManager.getInstance();
+    }
+
+    /** 立即把本 WebView 所在 profile 的 cookie 落盘（进程被回收也不丢）。 */
+    void flushCookies() {
+        try {
+            cookieManager().flush();
+        } catch (Throwable ignored) {
+        }
+    }
 
     AIMiniBrowserView(Context context, AIMiniBrowserEngine engine) {
+        this(context, engine, null);
+    }
+
+    /**
+     * @param profileName WebView 存储隔离用的 profile 名。非空且系统 WebView 支持
+     *                    MULTI_PROFILE 时，这个 WebView 会拥有独立的 cookie / localStorage /
+     *                    IndexedDB / 缓存，等价于"每个设备一个独立浏览器"。
+     *                    profile 必须在 WebView 创建后、加载任何页面之前绑定。
+     */
+    AIMiniBrowserView(Context context, AIMiniBrowserEngine engine, String profileName) {
         super(context);
         this.engine = engine;
         if ((context.getApplicationInfo().flags
@@ -156,6 +222,7 @@ final class AIMiniBrowserView extends FrameLayout {
         setDescendantFocusability(FOCUS_AFTER_DESCENDANTS);
         setBackgroundColor(contentBackgroundColor);
         webView = new WebView(context);
+        boundProfileName = applyProfile(webView, profileName);
         webView.setFocusable(true);
         webView.setFocusableInTouchMode(true);
         webView.setBackgroundColor(contentBackgroundColor);

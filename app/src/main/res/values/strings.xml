@@ -27,6 +27,10 @@
     <string name="device_current">当前</string>
     <string name="device_enter">进入设备</string>
     <string name="device_rename">重命名</string>
+    <string name="device_edit_title">编辑设备</string>
+    <string name="device_edit_action">编辑名称与链接</string>
+    <string name="device_edit_subtitle">可以改设备名称和访问链接（换电脑或换 token 时用，改链接不会丢失登录状态）。</string>
+    <string name="device_edit_saved">已保存</string>
     <string name="device_manage">设备管理</string>
     <string name="device_delete_title">删除设备</string>
     <string name="device_filter_all">全部</string>
