@@ -526,6 +526,17 @@ localStorage 会互相串台：在设备 A 登录后进设备 B，会被要求"�
 | 删除设备 | `deleteDeviceProfile()` 调 `ProfileStore.deleteProfile()` 清掉该设备的 cookie / localStorage / 缓存 |
 | 不支持时 | `WebViewFeature.MULTI_PROFILE` 不支持则跳过重建，退回共用默认 profile（功能正常，只是没有隔离），日志会记一行 |
 
+**"一台设备 = 一个浏览器"**：App 内打开的每个窗口都必须用这台设备的 profile。
+
+| 窗口 | profile 来源 |
+| --- | --- |
+| 主 WebView（设备主页） | `ensureMainBrowserForDevice()` 按设备 id 绑定 |
+| 外链窗口 `externalWebView`（点链接/新窗口打开） | `currentBrowserProfile()` —— 取自主 WebView，保证与设备同源同登录态 |
+| 设备切换 | `ensureMainBrowserForDevice()` 会关掉属于旧 profile 的外链窗口（`closeExternalPage()`），避免旧设备的窗口留在新设备上 |
+
+1.0.3 之前 `externalWebView` 创建时**没有绑定 profile**，落到默认 profile：从设备里点开的页面
+等于一个干净浏览器（登录态丢失）。1.0.4 起修正为跟随当前设备。
+
 **id 与 URL 解耦的好处**：`SavedConnection.id` 在设备创建时生成并持久化，之后改 URL / 换 token
 `id` 不变 —— 所以"编辑设备改链接"不会让用户重新登录（profile 挂在 id 上）。
 

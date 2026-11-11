@@ -3259,6 +3259,30 @@ public class MainActivity extends Activity {
         webView.setHorizontalScrollBarEnabled(false);
     }
 
+    /**
+     * 当前"这台设备"的浏览器 profile。App 内打开的每个窗口（主页、外链窗口、弹窗）
+     * 都必须用同一个 profile，才算是"一台设备一个浏览器"：从设备里点开的页面共享它的
+     * 登录态，而不是落到一个干净窗口。
+     */
+    private String currentBrowserProfile() {
+        if (webView != null && webView.profileName() != null
+                && !webView.profileName().isEmpty()) {
+            return webView.profileName();
+        }
+        return currentDeviceProfileName();
+    }
+
+    /** 由当前设备地址推算 profile 名（主 WebView 尚未创建时使用）。 */
+    private String currentDeviceProfileName() {
+        if (preferences == null) return "";
+        String url = preferences.getString(KEY_CURRENT_DEVICE_URL, "");
+        if (url == null || url.trim().isEmpty()) {
+            url = preferences.getString(KEY_LAST_URL, "");
+        }
+        if (url == null || url.trim().isEmpty()) return "";
+        return deviceProfileName(url);
+    }
+
     private void openExternalPage(String rawUrl) {
         String originalUrl = rawUrl == null ? "" : rawUrl.trim();
         String url = normalizeWebUrl(originalUrl);
@@ -3277,9 +3301,17 @@ public class MainActivity extends Activity {
         showApp();
         hideDownloadsPanel();
         showBrowserTransitionCover(2400L);
+        // 外链窗口属于"当前这台设备的浏览器"，必须绑定同一个 profile，
+        // 否则从设备里点开的页面会是一份干净的存储（登录态丢失、cookie 不通）。
+        String targetProfile = currentBrowserProfile();
+        if (externalWebView != null
+                && !targetProfile.equals(externalWebView.profileName())) {
+            // 设备切换过：旧外链窗口属于上一台设备，先关掉再按新设备重建。
+            closeExternalPage();
+        }
         boolean creatingBrowser = externalWebView == null;
         if (externalWebView == null) {
-            externalWebView = new AIMiniBrowserView(this, browserEngine);
+            externalWebView = new AIMiniBrowserView(this, browserEngine, targetProfile);
             // 外链页：浅色底 + 不注入 WebUI bridge，避免顶部透黑、脚本干扰。
             externalWebView.setPageBridgeEnabled(false);
             externalWebView.setContentBackgroundColor(Color.WHITE);
@@ -6900,6 +6932,12 @@ public class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
         configureWebView();
+        // 上一台设备留下的外链窗口属于旧 profile，切设备后必须一起关掉，
+        // 保证"这台设备的所有窗口"都落在同一个浏览器里。
+        if (externalWebView != null
+                && !currentMainProfile.equals(externalWebView.profileName())) {
+            closeExternalPage();
+        }
     }
 
     /**
@@ -6909,7 +6947,9 @@ public class MainActivity extends Activity {
     private void deleteDeviceProfile(String url) {
         if (url == null || url.trim().isEmpty()) return;
         String profileName = deviceProfileName(url);
-        if (profileName.equals(currentMainProfile)) return; // 正在用，等切走再说
+        // 正在被主窗口或外链窗口使用时不删，等切走再说。
+        if (profileName.equals(currentMainProfile)) return;
+        if (externalWebView != null && profileName.equals(externalWebView.profileName())) return;
         try {
             if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) return;
             ProfileStore store = ProfileStore.getInstance();
